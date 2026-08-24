@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Datasets
+Day30/data/
+Day31/data/
+
+# Large files
+*.tar.gz
+*.zip
+
+# Model files
+*.pth
+*.pt
