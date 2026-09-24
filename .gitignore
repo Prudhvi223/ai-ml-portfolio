@@ -1,18 +1,18 @@
-# Python
-__pycache__/
-*.pyc
+# VS Code
+.vscode/
 
-# Jupyter
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Jupyter checkpoints
 .ipynb_checkpoints/
 
-# Datasets
-Day30/data/
-Day31/data/
+# Environment files
+.env
 
-# Large files
-*.tar.gz
-*.zip
-
-# Model files
+# Large model files
 *.pth
-*.ptDay32/data/
+*.pkl
+*.pickle
+*.safetensors
