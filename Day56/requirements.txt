@@ -1,0 +1,6 @@
+
+streamlit
+ollama
+pydantic
+pypdf
+python-docx
