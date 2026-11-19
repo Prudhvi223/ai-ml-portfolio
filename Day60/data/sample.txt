@@ -1,0 +1,11 @@
+Machine learning is a subset of artificial intelligence.
+It allows computers to learn patterns from data.
+
+Deep learning is a subset of machine learning.
+It uses neural networks with multiple layers.
+
+Natural language processing helps computers understand human language.
+It is used in chatbots, translation, and text summarization.
+
+Vector databases store numerical representations called embeddings.
+They help retrieve semantically similar information.
