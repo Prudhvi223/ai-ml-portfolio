@@ -18,3 +18,4 @@ __pycache__/
 *.safetensors
 
 Day57/chroma_db/
+Day59/chroma_db/
