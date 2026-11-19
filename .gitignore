@@ -16,3 +16,5 @@ __pycache__/
 *.pkl
 *.pickle
 *.safetensors
+
+Day57/chroma_db/
