@@ -20,3 +20,13 @@ __pycache__/
 Day57/chroma_db/
 Day59/chroma_db/
 Day61/chroma_db/
+.env
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
+*.log
+
+Day61/chroma_db/
+Day70/chroma_db/
+Day70/uploads/
+Day70/.env

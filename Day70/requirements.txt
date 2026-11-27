@@ -1,0 +1,10 @@
+langchain
+langchain-core
+langchain-ollama
+langgraph
+chromadb
+pydantic
+json-repair
+streamlit
+rank-bm25
+ddgs
