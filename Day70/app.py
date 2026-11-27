@@ -1,5 +1,5 @@
-from ingestion import ingest_pdf
 from graph import research_graph, refresh_retriever
+from ingestion import ingest_pdf
 from config import (
     CHROMA_DB_PATH,
     UPLOAD_COLLECTION_NAME,
@@ -8,49 +8,72 @@ from config import (
     LLM_MODEL,
     EMBEDDING_MODEL
 )
-import hashlib
-import logging
-import tempfile
-from pathlib import Path
 import chromadb
 import streamlit as st
 import nltk
 import os
 import stat
+import logging
+import tempfile
+import hashlib
+from pathlib import Path
 
-# Configure a private, writable NLTK directory
-NLTK_DATA_DIR = "/tmp/nltk_data"
+# ==========================================
+# NLTK CLOUD-SAFE INITIALIZATION
+# IMPORTANT: Run this BEFORE importing
+# ingestion, graph, or any LlamaIndex module.
+# ==========================================
 
-# Restrict permissions for newly created files and folders
+NLTK_DATA_DIR = Path.home() / ".cache" / "nltk_data"
+NLTK_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# NLTK refuses to trust data in directories
+# that are writable by other users.
+try:
+    NLTK_DATA_DIR.chmod(stat.S_IRWXU)  # owner: read/write/execute only
+except OSError:
+    pass
+
+# Create downloaded files as owner-only.
 os.umask(0o077)
 
-os.makedirs(NLTK_DATA_DIR, exist_ok=True)
-os.chmod(NLTK_DATA_DIR, stat.S_IRWXU)
+os.environ["NLTK_DATA"] = str(NLTK_DATA_DIR)
 
 
-if NLTK_DATA_DIR not in nltk.data.path:
-    nltk.data.path.insert(0, NLTK_DATA_DIR)
+# Search the private directory first.
+private_nltk_path = str(NLTK_DATA_DIR)
+if private_nltk_path in nltk.data.path:
+    nltk.data.path.remove(private_nltk_path)
+nltk.data.path.insert(0, private_nltk_path)
 
-# Download stopwords if missing
+# Ensure stopwords exist in THIS private directory.
 try:
-    nltk.data.find("corpora/stopwords")
+    nltk.data.find(
+        "corpora/stopwords",
+        paths=[private_nltk_path]
+    )
 except LookupError:
-    success = nltk.download(
+    downloaded = nltk.download(
         "stopwords",
-        download_dir=NLTK_DATA_DIR,
-        quiet=True,
-        force=True
+        download_dir=private_nltk_path,
+        quiet=True
+    )
+    if not downloaded:
+        raise RuntimeError(
+            "Could not download the NLTK stopwords resource. "
+            "Check Streamlit Cloud network access and app logs."
+        )
+
+    # Verify the resource was installed in the private directory.
+    nltk.data.find(
+        "corpora/stopwords",
+        paths=[private_nltk_path]
     )
 
-    if not success:
-        raise RuntimeError("Failed to download NLTK stopwords.")
-
-    nltk.data.find("corpora/stopwords")
-
-
 # ==========================================
-# 1. STREAMLIT CONFIGURATION
+# STREAMLIT AND PROJECT IMPORTS
 # ==========================================
+
 
 st.set_page_config(
     page_title="AI Research Assistant",
@@ -59,7 +82,7 @@ st.set_page_config(
 )
 
 
-# ==========================================
+# ==========================================\n# STREAMLIT CONFIGURATION ALREADY SET ABOVE\n# ==========================================\n\n# ==========================================
 # 2. IMPORT PROJECT MODULES
 # ==========================================
 
