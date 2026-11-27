@@ -1,6 +1,9 @@
-
-from ingestion import ingest_pdf
-from graph import research_graph, refresh_retriever
+import streamlit as st
+import chromadb
+from pathlib import Path
+import tempfile
+import logging
+import hashlib
 from config import (
     CHROMA_DB_PATH,
     UPLOAD_COLLECTION_NAME,
@@ -9,13 +12,29 @@ from config import (
     LLM_MODEL,
     EMBEDDING_MODEL
 )
-import hashlib
-import logging
-import tempfile
-from pathlib import Path
+from graph import research_graph, refresh_retriever
+from ingestion import ingest_pdf
+import nltk
+import os
 
-import chromadb
-import streamlit as st
+# Use a writable directory for NLTK data on Streamlit Cloud.
+NLTK_DATA_DIR = "/tmp/nltk_data"
+
+os.makedirs(NLTK_DATA_DIR, exist_ok=True)
+os.environ["NLTK_DATA"] = NLTK_DATA_DIR
+
+
+if NLTK_DATA_DIR not in nltk.data.path:
+    nltk.data.path.insert(0, NLTK_DATA_DIR)
+
+try:
+    nltk.data.find("corpora/stopwords")
+except LookupError:
+    nltk.download(
+        "stopwords",
+        download_dir=NLTK_DATA_DIR,
+        quiet=True
+    )
 
 
 # ==========================================

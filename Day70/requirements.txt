@@ -12,6 +12,7 @@ json-repair
 rank-bm25
 ddgs
 sentence-transformers
+nltk
 
 # PDF ingestion
 llama-index-core
