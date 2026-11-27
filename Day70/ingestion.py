@@ -7,14 +7,17 @@ import chromadb
 
 from llama_index.core import SimpleDirectoryReader
 from llama_index.core.node_parser import SentenceSplitter
-from llama_index.embeddings.ollama import OllamaEmbedding
+
+from langchain_ollama import OllamaEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 
 from config import (
     CHROMA_DB_PATH,
     UPLOAD_COLLECTION_NAME,
     EMBEDDING_MODEL,
     CHUNK_SIZE,
-    CHUNK_OVERLAP
+    CHUNK_OVERLAP,
+    IS_CLOUD
 )
 
 
@@ -26,7 +29,28 @@ logger = logging.getLogger("research-assistant")
 
 
 # ==========================================
-# 2. PDF INGESTION FUNCTION
+# 2. EMBEDDING MODEL
+# ==========================================
+
+def get_embedding_model():
+
+    if IS_CLOUD:
+
+        return HuggingFaceEmbeddings(
+            model_name=EMBEDDING_MODEL,
+            model_kwargs={"device": "cpu"},
+            encode_kwargs={
+                "normalize_embeddings": True
+            }
+        )
+
+    return OllamaEmbeddings(
+        model=EMBEDDING_MODEL
+    )
+
+
+# ==========================================
+# 3. PDF INGESTION FUNCTION
 # ==========================================
 
 def ingest_pdf(
@@ -38,7 +62,9 @@ def ingest_pdf(
     Extract text from PDF, split it into chunks,
     generate embeddings and store them in ChromaDB.
 
-    Supports a custom collection name for safe staging.
+    Supports custom collection names for safe staging.
+
+    Uses Ollama locally and Hugging Face on Streamlit Cloud.
     """
 
     # --------------------------------------
@@ -53,15 +79,21 @@ def ingest_pdf(
         )
 
     if pdf_path.suffix.lower() != ".pdf":
-        raise ValueError("Only PDF files are supported.")
+        raise ValueError(
+            "Only PDF files are supported."
+        )
 
     if pdf_path.stat().st_size == 0:
-        raise ValueError("Uploaded PDF is empty.")
+        raise ValueError(
+            "Uploaded PDF is empty."
+        )
 
     pdf_bytes = pdf_path.read_bytes()
 
     if not pdf_bytes.startswith(b"%PDF-"):
-        raise ValueError("Invalid PDF file.")
+        raise ValueError(
+            "Invalid PDF file."
+        )
 
     # --------------------------------------
     # GENERATE FILE HASH
@@ -95,7 +127,6 @@ def ingest_pdf(
             "No readable text found in the PDF."
         )
 
-    # Add original filename and file hash
     for document in documents:
 
         document.metadata["file_name"] = filename
@@ -144,18 +175,15 @@ def ingest_pdf(
     # INITIALIZE EMBEDDING MODEL
     # --------------------------------------
 
-    embed_model = OllamaEmbedding(
-        model_name=EMBEDDING_MODEL
-    )
+    embed_model = get_embedding_model()
 
     # --------------------------------------
-    # GENERATE EMBEDDINGS
+    # PREPARE TEXT AND METADATA
     # --------------------------------------
 
     ids = []
     texts = []
     metadatas = []
-    embeddings = []
 
     for index, node in enumerate(nodes):
 
@@ -172,21 +200,18 @@ def ingest_pdf(
         metadata["file_hash"] = file_hash
 
         metadata["page_label"] = str(
-            metadata.get("page_label", "Unknown")
+            metadata.get(
+                "page_label",
+                "Unknown"
+            )
         )
 
         # Stable chunk ID
         chunk_id = f"{file_hash}_{index}"
 
-        # Generate embedding
-        embedding = embed_model.get_text_embedding(
-            text
-        )
-
         ids.append(chunk_id)
         texts.append(text)
         metadatas.append(metadata)
-        embeddings.append(embedding)
 
     if not ids:
         raise ValueError(
@@ -194,15 +219,37 @@ def ingest_pdf(
         )
 
     # --------------------------------------
-    # STORE IN CHROMADB
+    # GENERATE EMBEDDINGS AND STORE
     # --------------------------------------
 
-    collection.upsert(
-        ids=ids,
-        documents=texts,
-        metadatas=metadatas,
-        embeddings=embeddings
-    )
+    # Process in batches to avoid oversized ChromaDB requests.
+    batch_size = 500
+
+    for start in range(0, len(texts), batch_size):
+
+        end = start + batch_size
+
+        batch_texts = texts[start:end]
+        batch_ids = ids[start:end]
+        batch_metadatas = metadatas[start:end]
+
+        # Same embedding interface for both environments
+        batch_embeddings = embed_model.embed_documents(
+            batch_texts
+        )
+
+        collection.upsert(
+            ids=batch_ids,
+            documents=batch_texts,
+            metadatas=batch_metadatas,
+            embeddings=batch_embeddings
+        )
+
+        logger.info(
+            "Stored chunks %d to %d",
+            start + 1,
+            min(end, len(texts))
+        )
 
     logger.info(
         "PDF ingestion completed: %d chunks stored",

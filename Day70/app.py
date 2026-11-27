@@ -1,4 +1,14 @@
 
+from ingestion import ingest_pdf
+from graph import research_graph, refresh_retriever
+from config import (
+    CHROMA_DB_PATH,
+    UPLOAD_COLLECTION_NAME,
+    APP_TITLE,
+    IS_CLOUD,
+    LLM_MODEL,
+    EMBEDDING_MODEL
+)
 import hashlib
 import logging
 import tempfile
@@ -7,18 +17,25 @@ from pathlib import Path
 import chromadb
 import streamlit as st
 
-from graph import research_graph, refresh_retriever
-from ingestion import ingest_pdf
 
-from config import (
-    CHROMA_DB_PATH,
-    UPLOAD_COLLECTION_NAME,
-    APP_TITLE
+# ==========================================
+# 1. STREAMLIT CONFIGURATION
+# ==========================================
+
+st.set_page_config(
+    page_title="AI Research Assistant",
+    page_icon="🔬",
+    layout="wide"
 )
 
 
 # ==========================================
-# 1. LOGGING
+# 2. IMPORT PROJECT MODULES
+# ==========================================
+
+
+# ==========================================
+# 3. LOGGING
 # ==========================================
 
 logging.basicConfig(level=logging.INFO)
@@ -27,12 +44,13 @@ logger = logging.getLogger("research-assistant")
 
 
 # ==========================================
-# 2. HELPER FUNCTION: SAFE PDF REPLACEMENT
+# 4. SAFE PDF REPLACEMENT
 # ==========================================
 
 def replace_uploaded_pdf(pdf_path, original_filename):
     """
     Ingest a new PDF into a staging collection.
+
     Replace the active collection only after successful ingestion.
     Restore the previous collection if replacement fails.
     """
@@ -43,13 +61,14 @@ def replace_uploaded_pdf(pdf_path, original_filename):
 
     staging_name = f"{UPLOAD_COLLECTION_NAME}_staging"
 
-    # Remove any leftover staging collection
+    # Remove leftover staging collection
     try:
         client.delete_collection(name=staging_name)
     except Exception:
         pass
 
     try:
+
         # ----------------------------------
         # STEP 1: INGEST INTO STAGING
         # ----------------------------------
@@ -65,7 +84,9 @@ def replace_uploaded_pdf(pdf_path, original_filename):
         )
 
         if staging.count() == 0:
-            raise ValueError("Staging collection is empty.")
+            raise ValueError(
+                "Staging collection is empty."
+            )
 
         # ----------------------------------
         # STEP 2: READ STAGED DATA
@@ -80,7 +101,9 @@ def replace_uploaded_pdf(pdf_path, original_filename):
         )
 
         if not staged_data["ids"]:
-            raise ValueError("No PDF chunks were generated.")
+            raise ValueError(
+                "No PDF chunks were generated."
+            )
 
         # ----------------------------------
         # STEP 3: BACK UP ACTIVE COLLECTION
@@ -89,6 +112,7 @@ def replace_uploaded_pdf(pdf_path, original_filename):
         backup_data = None
 
         try:
+
             active = client.get_collection(
                 name=UPLOAD_COLLECTION_NAME
             )
@@ -102,6 +126,7 @@ def replace_uploaded_pdf(pdf_path, original_filename):
             )
 
         except Exception:
+
             logger.info(
                 "No previous PDF collection found."
             )
@@ -111,7 +136,7 @@ def replace_uploaded_pdf(pdf_path, original_filename):
         # ----------------------------------
 
         try:
-            # Delete old active collection
+
             try:
                 client.delete_collection(
                     name=UPLOAD_COLLECTION_NAME
@@ -119,12 +144,10 @@ def replace_uploaded_pdf(pdf_path, original_filename):
             except Exception:
                 pass
 
-            # Create fresh active collection
             active = client.create_collection(
                 name=UPLOAD_COLLECTION_NAME
             )
 
-            # Copy staged data into active collection
             active.upsert(
                 ids=staged_data["ids"],
                 documents=staged_data["documents"],
@@ -138,7 +161,6 @@ def replace_uploaded_pdf(pdf_path, original_filename):
                     "Active collection verification failed."
                 )
 
-            # Refresh retriever
             refresh_retriever()
 
         except Exception:
@@ -171,7 +193,6 @@ def replace_uploaded_pdf(pdf_path, original_filename):
                     embeddings=backup_data["embeddings"]
                 )
 
-            # Refresh retriever after restoration
             try:
                 refresh_retriever()
             except Exception:
@@ -186,10 +207,13 @@ def replace_uploaded_pdf(pdf_path, original_filename):
         # ----------------------------------
 
         try:
+
             client.delete_collection(
                 name=staging_name
             )
+
         except Exception:
+
             logger.warning(
                 "Could not remove staging collection."
             )
@@ -198,7 +222,6 @@ def replace_uploaded_pdf(pdf_path, original_filename):
 
     except Exception:
 
-        # Remove staging collection after failure
         try:
             client.delete_collection(
                 name=staging_name
@@ -210,24 +233,14 @@ def replace_uploaded_pdf(pdf_path, original_filename):
 
 
 # ==========================================
-# 3. STREAMLIT CONFIGURATION
-# ==========================================
-
-st.set_page_config(
-    page_title=APP_TITLE,
-    page_icon="🔬",
-    layout="wide"
-)
-
-
-# ==========================================
-# 4. APPLICATION HEADER
+# 5. APPLICATION HEADER
 # ==========================================
 
 st.title("🔬 AI Research Assistant")
 
 st.caption(
-    "Agentic RAG | LangGraph | Ollama | ChromaDB | Web Search"
+    "Agentic RAG | LangGraph | Hybrid Search | "
+    "ChromaDB | Web Search"
 )
 
 st.markdown(
@@ -238,7 +251,7 @@ st.markdown(
 
 
 # ==========================================
-# 5. LOAD GRAPH
+# 6. LOAD GRAPH
 # ==========================================
 
 @st.cache_resource
@@ -250,7 +263,7 @@ graph = load_graph()
 
 
 # ==========================================
-# 6. SESSION STATE
+# 7. SESSION STATE
 # ==========================================
 
 if "messages" not in st.session_state:
@@ -267,7 +280,7 @@ if "uploaded_pdf_chunks" not in st.session_state:
 
 
 # ==========================================
-# 7. SIDEBAR
+# 8. SIDEBAR
 # ==========================================
 
 with st.sidebar:
@@ -291,7 +304,7 @@ with st.sidebar:
 
         pdf_bytes = uploaded_file.getvalue()
 
-        # Validate PDF file signature
+        # Validate PDF signature
         if not pdf_bytes.startswith(b"%PDF-"):
 
             st.error(
@@ -300,7 +313,6 @@ with st.sidebar:
 
         else:
 
-            # Generate hash to identify duplicate uploads
             file_hash = hashlib.sha256(
                 pdf_bytes
             ).hexdigest()
@@ -315,7 +327,6 @@ with st.sidebar:
                         "Processing PDF and generating embeddings..."
                     ):
 
-                        # Save uploaded PDF temporarily
                         with tempfile.NamedTemporaryFile(
                             delete=False,
                             suffix=".pdf"
@@ -324,13 +335,11 @@ with st.sidebar:
                             temp_file.write(pdf_bytes)
                             temp_path = temp_file.name
 
-                        # Safely replace the uploaded PDF
                         ingestion_result = replace_uploaded_pdf(
                             pdf_path=temp_path,
                             original_filename=uploaded_file.name
                         )
 
-                        # Save upload information only after success
                         st.session_state.uploaded_pdf_hash = file_hash
 
                         st.session_state.uploaded_pdf_name = (
@@ -341,13 +350,17 @@ with st.sidebar:
                             ingestion_result["chunks_added"]
                         )
 
-                    st.success("PDF uploaded successfully!")
+                    st.success(
+                        "PDF uploaded successfully!"
+                    )
 
                     st.rerun()
 
                 except Exception as e:
 
-                    logger.exception("PDF ingestion failed")
+                    logger.exception(
+                        "PDF ingestion failed"
+                    )
 
                     st.error(
                         f"PDF processing failed: {str(e)}"
@@ -355,14 +368,14 @@ with st.sidebar:
 
                 finally:
 
-                    # Remove temporary PDF file
                     if temp_path and Path(temp_path).exists():
-
                         Path(temp_path).unlink()
 
             else:
 
-                st.info("This PDF is already uploaded.")
+                st.info(
+                    "This PDF is already uploaded."
+                )
 
     # --------------------------------------
     # UPLOADED PDF STATUS
@@ -384,7 +397,9 @@ with st.sidebar:
 
     else:
 
-        st.info("No PDF uploaded yet.")
+        st.info(
+            "No PDF uploaded yet."
+        )
 
     st.divider()
 
@@ -405,17 +420,29 @@ with st.sidebar:
     # MODEL INFORMATION
     # --------------------------------------
 
-    st.markdown("**Local AI Model**")
-    st.write("Llama 3.2:1b")
+    st.markdown("**LLM Provider**")
+
+    if IS_CLOUD:
+        st.write(f"Groq: {LLM_MODEL}")
+    else:
+        st.write(f"Ollama: {LLM_MODEL}")
 
     st.markdown("**Embedding Model**")
-    st.write("nomic-embed-text")
+    st.write(EMBEDDING_MODEL)
 
     st.markdown("**Vector Database**")
     st.write("ChromaDB")
 
     st.markdown("**Orchestration**")
     st.write("LangGraph")
+
+    if IS_CLOUD:
+
+        st.info(
+            "Cloud mode: uploaded PDFs are stored in temporary "
+            "application storage. You may need to upload them "
+            "again after an application restart."
+        )
 
     st.divider()
 
@@ -433,7 +460,7 @@ with st.sidebar:
 
 
 # ==========================================
-# 8. DISPLAY CHAT HISTORY
+# 9. DISPLAY CHAT HISTORY
 # ==========================================
 
 for message in st.session_state.messages:
@@ -444,7 +471,7 @@ for message in st.session_state.messages:
 
 
 # ==========================================
-# 9. USER INPUT
+# 10. USER INPUT
 # ==========================================
 
 question = st.chat_input(
@@ -453,7 +480,7 @@ question = st.chat_input(
 
 
 # ==========================================
-# 10. EXECUTE RESEARCH WORKFLOW
+# 11. EXECUTE RESEARCH WORKFLOW
 # ==========================================
 
 if question:
@@ -464,7 +491,6 @@ if question:
     })
 
     with st.chat_message("user"):
-
         st.markdown(question)
 
     with st.chat_message("assistant"):
@@ -479,33 +505,63 @@ if question:
                     "question": question,
                     "rag_context": "",
                     "web_context": "",
+                    "rag_sources": [],
+                    "web_sources": [],
                     "sources": [],
-                    "errors": []
+                    "errors": [],
+                    "rag_errors": [],
+                    "web_errors": []
                 }
 
                 result = graph.invoke(initial_state)
 
             # ----------------------------------
-            # RESEARCH PLAN
+            # ACTUAL RESEARCH SOURCES USED
             # ----------------------------------
 
-            st.subheader("📋 Research Plan")
+            st.subheader("📋 Research Sources Used")
 
             col1, col2 = st.columns(2)
 
             with col1:
 
-                if result.get("search_pdf"):
-                    st.success("📚 PDF Search: Selected")
+                if result.get("rag_context", "").strip():
+
+                    st.success(
+                        "📚 PDF Search: Used"
+                    )
+
+                elif result.get("search_pdf"):
+
+                    st.warning(
+                        "📚 PDF Search: Attempted, no relevant evidence"
+                    )
+
                 else:
-                    st.info("📚 PDF Search: Not selected")
+
+                    st.info(
+                        "📚 PDF Search: Not used"
+                    )
 
             with col2:
 
-                if result.get("search_web"):
-                    st.success("🌐 Web Search: Selected")
+                if result.get("web_context", "").strip():
+
+                    st.success(
+                        "🌐 Web Search: Used"
+                    )
+
+                elif result.get("search_web"):
+
+                    st.warning(
+                        "🌐 Web Search: Attempted, no results"
+                    )
+
                 else:
-                    st.info("🌐 Web Search: Not selected")
+
+                    st.info(
+                        "🌐 Web Search: Not used"
+                    )
 
             # ----------------------------------
             # FINAL REPORT
@@ -537,11 +593,15 @@ if question:
                         start=1
                     ):
 
-                        st.write(f"{index}. {source}")
+                        st.write(
+                            f"{index}. {source}"
+                        )
 
                 else:
 
-                    st.warning("No sources were retrieved.")
+                    st.warning(
+                        "No sources were retrieved."
+                    )
 
             # ----------------------------------
             # RETRIEVED CONTEXT
@@ -551,26 +611,34 @@ if question:
 
                 st.markdown("**PDF Context**")
 
+                rag_context = result.get(
+                    "rag_context",
+                    ""
+                )
+
                 st.write(
-                    result.get(
-                        "rag_context",
-                        "No PDF context retrieved."
-                    )
+                    rag_context
+                    if rag_context
+                    else "No relevant PDF context retrieved."
                 )
 
                 st.divider()
 
                 st.markdown("**Web Context**")
 
+                web_context = result.get(
+                    "web_context",
+                    ""
+                )
+
                 st.write(
-                    result.get(
-                        "web_context",
-                        "No web context retrieved."
-                    )
+                    web_context
+                    if web_context
+                    else "No web context retrieved."
                 )
 
             # ----------------------------------
-            # ERRORS
+            # WORKFLOW WARNINGS
             # ----------------------------------
 
             errors = result.get("errors", [])
@@ -580,7 +648,6 @@ if question:
                 with st.expander("⚠️ Workflow Warnings"):
 
                     for error in errors:
-
                         st.warning(error)
 
             # ----------------------------------
@@ -594,8 +661,17 @@ if question:
 
         except Exception as e:
 
-            logger.exception("Research workflow failed")
+            logger.exception(
+                "Research workflow failed"
+            )
 
-            st.error(
+            error_message = (
                 f"Research workflow failed: {str(e)}"
             )
+
+            st.error(error_message)
+
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": error_message
+            })

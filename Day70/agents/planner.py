@@ -6,29 +6,28 @@ import chromadb
 
 from json_repair import repair_json
 from pydantic import BaseModel, Field
-from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 
 from config import (
-    LLM_MODEL,
     CHROMA_DB_PATH,
     UPLOAD_COLLECTION_NAME
 )
+
+from llm_factory import get_chat_model
 
 
 # ==========================================
 # 1. LOGGING
 # ==========================================
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("research-assistant.planner")
 
 
 # ==========================================
-# 2. SUBQUESTION MODEL
+# 2. PYDANTIC MODELS
 # ==========================================
 
 class SubQuestion(BaseModel):
-
     title: str = Field(
         description="Short title of the research question"
     )
@@ -39,12 +38,7 @@ class SubQuestion(BaseModel):
     )
 
 
-# ==========================================
-# 3. RESEARCH PLAN MODEL
-# ==========================================
-
 class ResearchPlan(BaseModel):
-
     search_pdf: bool = Field(
         description="Whether the PDF knowledge base should be searched"
     )
@@ -63,17 +57,14 @@ class ResearchPlan(BaseModel):
 
 
 # ==========================================
-# 4. INITIALIZE LOCAL LLM
+# 3. INITIALIZE LLM
 # ==========================================
 
-llm = ChatOllama(
-    model=LLM_MODEL,
-    temperature=0
-)
+llm = get_chat_model()
 
 
 # ==========================================
-# 5. PLANNING PROMPT
+# 4. PLANNING PROMPT
 # ==========================================
 
 planner_prompt = ChatPromptTemplate.from_messages([
@@ -81,46 +72,46 @@ planner_prompt = ChatPromptTemplate.from_messages([
     (
         "system",
         """
-        You are an intelligent research planning agent.
+You are an intelligent research planning agent.
 
-        Understand the user's research question and create
-        a structured research plan.
+Understand the user's research question and create
+a structured research plan.
 
-        Generate:
+Generate:
 
-        1. A clear research goal.
-        2. Two to five research subquestions.
-        3. A title and description for every subquestion.
+1. A clear research goal.
+2. Two to five research subquestions.
+3. A title and description for every subquestion.
 
-        Return a valid JSON object containing:
+Return a valid JSON object containing:
 
-        - research_goal: A string
-        - subquestions: A list of objects
-        - Each object must contain title and description
+- research_goal: A string
+- subquestions: A list of objects
+- Each object must contain title and description
 
-        Example JSON structure:
+Example JSON structure:
 
+{{
+    "research_goal": "Compare two technologies",
+    "subquestions": [
         {{
-            "research_goal": "Compare two technologies",
-            "subquestions": [
-                {{
-                    "title": "What is technology A?",
-                    "description": "Explain technology A."
-                }},
-                {{
-                    "title": "What is technology B?",
-                    "description": "Explain technology B."
-                }}
-            ]
+            "title": "What is technology A?",
+            "description": "Explain technology A."
+        }},
+        {{
+            "title": "What is technology B?",
+            "description": "Explain technology B."
         }}
+    ]
+}}
 
-        IMPORTANT:
+IMPORTANT:
 
-        - Do not include search_pdf or search_web.
-        - Do not include Markdown code fences.
-        - Return valid JSON only.
-        - Do not add explanations outside the JSON.
-        """
+- Do not include search_pdf or search_web.
+- Do not include Markdown code fences.
+- Return valid JSON only.
+- Do not add explanations outside the JSON.
+"""
     ),
 
     (
@@ -130,18 +121,16 @@ planner_prompt = ChatPromptTemplate.from_messages([
 
 ])
 
-
 planner_chain = planner_prompt | llm
 
 
 # ==========================================
-# 6. CHECK PDF AVAILABILITY
+# 5. CHECK PDF AVAILABILITY
 # ==========================================
 
 def is_pdf_available():
 
     try:
-
         client = chromadb.PersistentClient(
             path=str(CHROMA_DB_PATH)
         )
@@ -170,7 +159,7 @@ def is_pdf_available():
 
 
 # ==========================================
-# 7. SOURCE SELECTION POLICY
+# 6. SOURCE SELECTION
 # ==========================================
 
 def decide_sources(
@@ -179,19 +168,82 @@ def decide_sources(
 ):
 
     if not question or not question.strip():
-
         raise ValueError(
             "Research question cannot be empty."
         )
 
     q = question.lower().strip()
-
     q = re.sub(r"\s+", " ", q)
 
-    # Check ChromaDB if availability was not supplied
     if pdf_available is None:
-
         pdf_available = is_pdf_available()
+
+    # --------------------------------------
+    # PDF EXCLUSION PHRASES
+    # --------------------------------------
+
+    pdf_exclusion_phrases = [
+
+        "do not use my uploaded pdf",
+        "don't use my uploaded pdf",
+        "do not use the uploaded pdf",
+        "don't use the uploaded pdf",
+        "do not use the pdf",
+        "don't use the pdf",
+        "do not use pdf",
+        "don't use pdf",
+        "do not search the pdf",
+        "don't search the pdf",
+        "without using the pdf",
+        "without using my pdf",
+        "without the pdf",
+        "no pdf search",
+        "do not use my uploaded document",
+        "don't use my uploaded document",
+        "do not use the uploaded document",
+        "don't use the uploaded document",
+        "do not use the document",
+        "don't use the document",
+        "without using the document",
+        "no document search"
+
+    ]
+
+    pdf_forbidden = any(
+        phrase in q
+        for phrase in pdf_exclusion_phrases
+    )
+
+    # --------------------------------------
+    # WEB EXCLUSION PHRASES
+    # --------------------------------------
+
+    web_exclusion_phrases = [
+
+        "do not search the web",
+        "don't search the web",
+        "do not search web",
+        "don't search web",
+        "without using the web",
+        "without web search",
+        "no web search",
+        "do not use the web",
+        "don't use the web",
+        "do not use web",
+        "don't use web",
+        "without internet",
+        "do not use internet",
+        "don't use internet",
+        "do not search online",
+        "don't search online",
+        "no internet search"
+
+    ]
+
+    web_forbidden = any(
+        phrase in q
+        for phrase in web_exclusion_phrases
+    )
 
     # --------------------------------------
     # PDF INDICATORS
@@ -246,70 +298,83 @@ def decide_sources(
     ]
 
     # --------------------------------------
-    # DETECT SOURCE INTENT
+    # DETECT POSITIVE INTENT
     # --------------------------------------
 
-    explicit_pdf = any(
-        re.search(pattern, q)
-        for pattern in pdf_patterns
+    explicit_pdf = (
+        any(
+            re.search(pattern, q)
+            for pattern in pdf_patterns
+        )
+        and not pdf_forbidden
     )
 
-    explicit_web = any(
-        re.search(pattern, q)
-        for pattern in web_patterns
-    )
-
-    both_requested = (
-        explicit_pdf and explicit_web
+    explicit_web = (
+        any(
+            re.search(pattern, q)
+            for pattern in web_patterns
+        )
+        and not web_forbidden
     )
 
     # --------------------------------------
     # FINAL SOURCE DECISION
     # --------------------------------------
 
-    if both_requested:
+    # User explicitly excluded both sources.
+    if pdf_forbidden and web_forbidden:
+
+        search_pdf = False
+        search_web = False
+
+    # User explicitly excluded PDF.
+    elif pdf_forbidden:
+
+        search_pdf = False
+        search_web = not web_forbidden
+
+    # User explicitly excluded web.
+    elif web_forbidden:
+
+        search_pdf = pdf_available
+        search_web = False
+
+    # User requested both sources.
+    elif explicit_pdf and explicit_web:
 
         search_pdf = pdf_available
         search_web = True
 
+    # User requested web.
     elif explicit_web:
 
-        search_pdf = (
-            explicit_pdf and pdf_available
-        )
-
+        search_pdf = False
         search_web = True
 
+    # User requested PDF.
     elif explicit_pdf:
 
         if pdf_available:
-
             search_pdf = True
             search_web = False
-
         else:
-
             search_pdf = False
             search_web = True
 
+    # No explicit source preference.
     elif pdf_available:
-
-        # PDF IS THE DEFAULT SOURCE
-        # FOR NORMAL QUESTIONS
 
         search_pdf = True
         search_web = False
 
     else:
 
-        # No uploaded PDF:
-        # Use web search
-
         search_pdf = False
         search_web = True
 
     logger.info(
-        "SOURCE SELECTION | Question: %s | PDF available: %s | PDF: %s | Web: %s",
+        "SOURCE SELECTION | Question: %s | "
+        "PDF available: %s | PDF: %s | Web: %s",
         question,
         pdf_available,
         search_pdf,
@@ -320,7 +385,7 @@ def decide_sources(
 
 
 # ==========================================
-# 8. NORMALIZE LLM OUTPUT
+# 7. NORMALIZE RESEARCH PLAN
 # ==========================================
 
 def normalize_research_plan(
@@ -329,7 +394,6 @@ def normalize_research_plan(
     pdf_available=None
 ):
 
-    # Source decisions are controlled by Python
     search_pdf, search_web = decide_sources(
         question,
         pdf_available
@@ -341,16 +405,10 @@ def normalize_research_plan(
     )
 
     if not isinstance(raw_questions, list):
-
         raw_questions = [raw_questions]
 
     unique_questions = []
-
     seen = set()
-
-    # --------------------------------------
-    # PROCESS SUBQUESTIONS
-    # --------------------------------------
 
     for item in raw_questions:
 
@@ -375,11 +433,9 @@ def normalize_research_plan(
             )
 
         else:
-
             continue
 
         title = str(title).strip()
-
         description = str(description).strip()
 
         key = title.lower()
@@ -391,14 +447,9 @@ def normalize_research_plan(
             unique_questions.append({
 
                 "title": title,
-
                 "description": description
 
             })
-
-    # --------------------------------------
-    # FALLBACK SUBQUESTION
-    # --------------------------------------
 
     if not unique_questions:
 
@@ -411,10 +462,6 @@ def normalize_research_plan(
             )
 
         }]
-
-    # --------------------------------------
-    # RESEARCH GOAL
-    # --------------------------------------
 
     research_goal = str(
         data.get(
@@ -437,6 +484,52 @@ def normalize_research_plan(
 
 
 # ==========================================
+# 8. DETERMINISTIC FALLBACK PLAN
+# ==========================================
+
+def create_fallback_plan(
+    question: str,
+    pdf_available=None
+) -> ResearchPlan:
+
+    search_pdf, search_web = decide_sources(
+        question,
+        pdf_available
+    )
+
+    fallback_plan = {
+
+        "search_pdf": search_pdf,
+
+        "search_web": search_web,
+
+        "research_goal": question.strip(),
+
+        "subquestions": [
+            {
+                "title": question.strip(),
+                "description": (
+                    "Answer the user's research question "
+                    "using the selected evidence sources."
+                )
+            }
+        ]
+
+    }
+
+    logger.warning(
+        "Using deterministic research plan fallback. "
+        "PDF: %s | Web: %s",
+        search_pdf,
+        search_web
+    )
+
+    return ResearchPlan.model_validate(
+        fallback_plan
+    )
+
+
+# ==========================================
 # 9. CREATE RESEARCH PLAN
 # ==========================================
 
@@ -445,38 +538,51 @@ def create_research_plan(
 ) -> ResearchPlan:
 
     if not question or not question.strip():
-
         raise ValueError(
             "Research question cannot be empty."
         )
+
+    question = question.strip()
 
     logger.info(
         "Creating research plan: %s",
         question
     )
 
-    # --------------------------------------
-    # STEP 1: CHECK PDF AVAILABILITY
-    # --------------------------------------
-
     pdf_available = is_pdf_available()
-
-    # --------------------------------------
-    # STEP 2: GENERATE RESEARCH PLAN
-    # --------------------------------------
-
-    response = planner_chain.invoke({
-
-        "question": question
-
-    })
-
-    content = response.content.strip()
 
     try:
 
         # ----------------------------------
-        # STEP 3: REPAIR JSON
+        # STEP 1: CALL LLM
+        # ----------------------------------
+
+        response = planner_chain.invoke({
+
+            "question": question
+
+        })
+
+        content = response.content
+
+        if isinstance(content, list):
+
+            content = "".join(
+                str(item.get("text", ""))
+                if isinstance(item, dict)
+                else str(item)
+                for item in content
+            )
+
+        content = str(content).strip()
+
+        if not content:
+            raise ValueError(
+                "LLM returned an empty response."
+            )
+
+        # ----------------------------------
+        # STEP 2: REPAIR JSON
         # ----------------------------------
 
         data = repair_json(
@@ -485,13 +591,12 @@ def create_research_plan(
         )
 
         if not isinstance(data, dict):
-
             raise ValueError(
                 "LLM did not return a valid JSON object."
             )
 
         # ----------------------------------
-        # STEP 4: NORMALIZE OUTPUT
+        # STEP 3: NORMALIZE PLAN
         # ----------------------------------
 
         normalized_data = normalize_research_plan(
@@ -501,7 +606,7 @@ def create_research_plan(
         )
 
         # ----------------------------------
-        # STEP 5: PYDANTIC VALIDATION
+        # STEP 4: VALIDATE PLAN
         # ----------------------------------
 
         plan = ResearchPlan.model_validate(
@@ -509,7 +614,8 @@ def create_research_plan(
         )
 
         logger.info(
-            "PLAN CREATED | PDF: %s | Web: %s | Subquestions: %d",
+            "PLAN CREATED | PDF: %s | Web: %s | "
+            "Subquestions: %d",
             plan.search_pdf,
             plan.search_web,
             len(plan.subquestions)
@@ -519,10 +625,20 @@ def create_research_plan(
 
     except Exception as e:
 
-        logger.exception(
-            "Research planning failed"
+        logger.warning(
+            "LLM research planning failed: %s",
+            e
         )
 
-        raise ValueError(
-            f"Could not create a valid research plan: {e}"
-        ) from e
+        logger.warning(
+            "Switching to deterministic fallback plan."
+        )
+
+        # ----------------------------------
+        # STEP 5: FALLBACK
+        # ----------------------------------
+
+        return create_fallback_plan(
+            question,
+            pdf_available
+        )

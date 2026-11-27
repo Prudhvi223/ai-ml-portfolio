@@ -1,11 +1,11 @@
 
 import logging
+from typing import List
 
-from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-from config import LLM_MODEL
+from llm_factory import get_chat_model
 
 
 # ==========================================
@@ -19,10 +19,7 @@ logger = logging.getLogger("research-assistant.report")
 # 2. INITIALIZE LLM
 # ==========================================
 
-llm = ChatOllama(
-    model=LLM_MODEL,
-    temperature=0
-)
+llm = get_chat_model()
 
 
 # ==========================================
@@ -31,189 +28,234 @@ llm = ChatOllama(
 
 prompt = ChatPromptTemplate.from_template(
     """
-You are a professional, evidence-grounded AI research assistant.
+You are an evidence-grounded AI research assistant.
 
-Your responsibility is to produce an accurate, relevant,
-well-structured research report answering the user's exact question.
+Your task is to answer the user's exact research question
+using only the evidence supplied below.
 
-You must use the supplied evidence carefully.
+Accuracy, relevance and source attribution are more important
+than report length.
 
-==============================
+==================================================
 USER QUESTION
-==============================
+==================================================
 
 {question}
 
 
-==============================
+==================================================
 PDF EVIDENCE
-==============================
+==================================================
 
 {rag_context}
 
 
-==============================
+==================================================
 WEB EVIDENCE
-==============================
+==================================================
 
 {web_context}
 
 
-==============================
+==================================================
 AVAILABLE SOURCES
-==============================
+==================================================
 
 {sources}
 
 
-==============================
-1. QUESTION UNDERSTANDING
-==============================
+==================================================
+1. STRICT EVIDENCE RULES
+==================================================
 
-First, understand exactly what the user is asking.
+Follow these rules throughout the entire report:
 
-- Identify the main topic and the specific information requested.
-- Answer the actual question instead of writing a generic article.
-- Do not change the topic or broaden the scope unnecessarily.
-- Give priority to information directly relevant to the question.
+1. Use only information supported by the supplied evidence.
 
-If the user asks for the latest, recent, or current developments:
+2. Never invent facts, statistics, dates, examples, findings,
+   technical concepts, research developments or comparisons.
 
-- Prioritize recent developments found in the supplied web evidence.
-- Use publication dates only when they are explicitly available.
-- Distinguish dated information from information without dates.
-- Do not describe an undated source as the latest development.
-- Do not invent current trends, events, dates, or statistics.
+3. Do not introduce a concept simply because it is related
+   to the user's question.
 
-==============================
-2. EVIDENCE AND GROUNDING RULES
-==============================
+4. Do not treat a source title or URL as proof of a claim.
+   The actual evidence must support the claim.
 
-Follow these rules strictly:
+5. Do not use general knowledge to fill gaps in the evidence.
 
-1. Use only facts supported by the supplied PDF or web evidence.
+6. If information is missing, explicitly say:
+   "The supplied evidence does not establish this."
 
-2. Never use general knowledge to fill gaps in the evidence.
+7. Do not repeat the same information in different sections.
 
-3. Do not invent definitions, examples, applications, statistics,
-   technical details, comparisons, or research findings.
+8. Do not write generic filler or unnecessary introductions.
 
-4. Ignore search results that are unrelated to the user's question.
+9. Do not make unsupported claims about improvements,
+   performance, accuracy, efficiency or advantages.
 
-5. Do not confuse a source mentioning a topic with a source
-   actually providing evidence about that topic.
+10. Do not claim that a source supports something it does not
+    actually discuss.
 
-6. Preserve the meaning and terminology of the original sources.
+==================================================
+2. PDF AND WEB SEPARATION
+==================================================
 
-7. If the PDF and web evidence disagree, clearly explain
-   the disagreement and identify the supporting sources.
+Keep PDF and web information clearly separated.
 
-8. If the available evidence is insufficient for a particular
-   part of the question, state exactly what is missing.
+PDF FINDINGS:
 
-9. Do not claim that evidence is insufficient when the supplied
-   evidence already answers the question.
+- Use only information from PDF EVIDENCE.
+- Mention the exact PDF filename and page number when available.
+- Do not include web information in this section.
+- Do not invent page numbers.
 
-10. Never pretend that a PDF or web search was performed
-    if its corresponding evidence is empty.
+WEB FINDINGS:
 
-11. Do not manufacture content just to make the report longer.
+- Use only information from WEB EVIDENCE.
+- Include the source title and URL when supplied.
+- Use publication dates only when explicitly provided.
+- Do not describe undated information as the latest development.
+- Do not include PDF information in this section.
 
-==============================
-3. SOURCE AND CITATION RULES
-==============================
+COMPARISON:
 
-- Every important factual claim must be traceable to supplied evidence.
-- Use only the sources provided in AVAILABLE SOURCES.
-- Use the exact source names, page numbers, and URLs supplied.
-- Never invent a source, URL, publication date, or page number.
-- Place citations close to the claims they support.
+- Compare PDF findings with web findings only when both
+  sources provide evidence for the same topic.
+- Clearly explain similarities and differences.
+- Do not manufacture comparisons.
+- If the evidence does not support a comparison, say so.
+
+==================================================
+3. CITATION RULES
+==================================================
+
+Every important factual statement must have supporting evidence.
+
+For PDF information:
+
+Use this format:
+
+(Source: filename, Page X)
+
+For web information:
+
+Use this format:
+
+(Source: article title, URL)
+
+Important:
+
+- Use only references present in AVAILABLE SOURCES.
+- Do not invent URLs, titles, dates or page numbers.
 - Do not cite unrelated sources.
-- Do not include a reference that was not supplied.
-- Do not create fake numbered citations.
+- Place citations immediately after the relevant statements.
+- Do not create fake references.
+- If the exact supporting reference is unavailable,
+  state that the claim cannot be verified.
 
-For PDF evidence, identify the document and page number.
-
-For web evidence, use the supplied article URL and title when available.
-
-If a claim has no supporting source, do not present it as a fact.
-
-==============================
+==================================================
 4. REPORT STRUCTURE
-==============================
+==================================================
 
 Use the following structure when appropriate.
 
-# Title
+# Research Report
 
-Create a concise title that directly reflects the user's question.
+## 1. Direct Answer
 
-# Introduction
+Answer the user's question directly in a short paragraph.
 
-Introduce the topic in a few sentences.
-Do not write a generic introduction unrelated to the question.
+Do not provide a generic introduction.
 
-# Key Findings
+## 2. PDF Findings
 
-Present the most important evidence-based findings.
+Explain the important findings from the uploaded document.
 
-Use numbered points or bullets.
+Use numbered points when appropriate.
 
-For questions asking for a definition, comparison, or explanation,
-answer that request directly.
+Every point must be supported by PDF evidence
+and include its relevant page citation.
 
-# Detailed Analysis
+If no PDF evidence exists, state that clearly.
 
-Explain the findings in a logical order.
+## 3. Web Findings
 
-- Answer the user's question directly.
-- Explain technical concepts using the supplied evidence.
-- Use comparison tables when the evidence supports a comparison.
-- For recent developments, organize findings by date or topic
-  when the supplied evidence supports doing so.
-- Avoid repeating the same information.
+Explain the relevant findings from web research.
 
-# Evidence Limitations
+Include only information supported by web evidence.
 
-Include this section only when there are meaningful limitations.
+Cite the actual sources.
 
-Explain:
-- Which requested information is missing.
-- Which details cannot be verified from the supplied evidence.
-- Whether the available sources are outdated or undated,
-  when that affects a request for recent information.
+If no web evidence exists, state that clearly.
 
-If there are no important limitations, do not invent any.
+## 4. Comparison and Analysis
 
-# Conclusion
+Include this section only if the user asks for a comparison
+or if comparison is necessary to answer the question.
 
-Summarize the main answer in a short paragraph.
+Use a table when it makes the comparison clearer.
 
-# References
+Compare only points supported by both evidence sets.
 
-List the actual sources used in the report.
+Do not introduce unrelated concepts.
 
-Include exact PDF page references or web URLs when supplied.
+## 5. Evidence Limitations
 
-Do not list unused sources.
+Mention only meaningful limitations.
 
-==============================
-5. WRITING QUALITY
-==============================
+Explain what information is missing or cannot be verified.
 
-- Use clear, professional English.
+Do not invent limitations.
+
+## 6. Conclusion
+
+Summarize the answer in a few sentences.
+
+Do not introduce new information.
+
+## 7. References
+
+List only the sources actually used.
+
+Use the exact source details supplied.
+
+==================================================
+5. SPECIAL INSTRUCTIONS FOR RECENT DEVELOPMENTS
+==================================================
+
+When the user asks about recent developments:
+
+- Prioritize relevant web evidence.
+- Use dates only when explicitly supplied.
+- Distinguish confirmed developments from general explanations.
+- Do not call an old or undated article a 2026 development.
+- Do not invent future trends or predictions.
+- Do not assume that a development is new simply because
+  it appears in a search result.
+
+==================================================
+6. WRITING QUALITY
+==================================================
+
+- Use clear and simple professional English.
+- Explain technical concepts without changing their meaning.
 - Avoid unnecessary repetition.
-- Avoid generic filler sentences.
-- Explain technical terminology clearly.
-- Keep the report proportional to the complexity of the question.
-- Do not write a long report for a simple factual question.
-- Do not use unsupported claims to make the report sound impressive.
+- Keep the report proportional to the question.
+- Prefer concise explanations over lengthy generic content.
+- Use headings and bullet points for readability.
+- Never add unsupported information to make the report longer.
 
-FINAL REQUIREMENT:
+FINAL CHECK BEFORE ANSWERING:
 
-Accuracy and relevance are more important than report length.
+Check every factual claim against the supplied evidence.
 
-Answer the user's actual question using the available evidence.
+Remove any claim that is not supported.
+
+Make sure PDF and web findings are separated.
+
+Make sure citations are accurate.
+
+Now answer the user's exact question.
 """
 )
 
@@ -230,7 +272,34 @@ report_chain = (
 
 
 # ==========================================
-# 5. GENERATE RESEARCH REPORT
+# 5. FORMAT SOURCES
+# ==========================================
+
+def format_sources(sources: List[str]) -> str:
+
+    unique_sources = list(
+        dict.fromkeys(
+            source.strip()
+            for source in (sources or [])
+            if isinstance(source, str)
+            and source.strip()
+        )
+    )
+
+    if not unique_sources:
+        return "No source references were retrieved."
+
+    return "\n".join(
+        f"{index}. {source}"
+        for index, source in enumerate(
+            unique_sources,
+            start=1
+        )
+    )
+
+
+# ==========================================
+# 6. GENERATE RESEARCH REPORT
 # ==========================================
 
 def generate_report(
@@ -240,13 +309,20 @@ def generate_report(
     sources: list
 ) -> str:
 
+    # --------------------------------------
+    # VALIDATE QUESTION
+    # --------------------------------------
+
     if not question or not question.strip():
+
         raise ValueError(
             "Research question cannot be empty."
         )
 
+    question = question.strip()
+
     logger.info(
-        "Generating research report for: %s",
+        "Generating report for: %s",
         question
     )
 
@@ -257,7 +333,7 @@ def generate_report(
     pdf_evidence = (
         rag_context.strip()
         if rag_context and rag_context.strip()
-        else "No PDF evidence was retrieved."
+        else "No relevant PDF evidence was retrieved."
     )
 
     # --------------------------------------
@@ -267,31 +343,16 @@ def generate_report(
     external_evidence = (
         web_context.strip()
         if web_context and web_context.strip()
-        else "No web evidence was retrieved."
+        else "No relevant web evidence was retrieved."
     )
 
     # --------------------------------------
-    # PREPARE AVAILABLE SOURCES
+    # PREPARE SOURCE REFERENCES
     # --------------------------------------
 
-    unique_sources = list(
-        dict.fromkeys(
-            source.strip()
-            for source in (sources or [])
-            if isinstance(source, str) and source.strip()
-        )
+    formatted_sources = format_sources(
+        sources
     )
-
-    formatted_sources = "\n".join(
-        f"[{index}] {source}"
-        for index, source in enumerate(
-            unique_sources,
-            start=1
-        )
-    )
-
-    if not formatted_sources:
-        formatted_sources = "No sources were retrieved."
 
     # --------------------------------------
     # GENERATE REPORT
@@ -299,9 +360,13 @@ def generate_report(
 
     try:
 
+        logger.info(
+            "Sending evidence to the language model."
+        )
+
         report = report_chain.invoke({
 
-            "question": question.strip(),
+            "question": question,
 
             "rag_context": pdf_evidence,
 
@@ -317,11 +382,13 @@ def generate_report(
                 "The language model returned an empty report."
             )
 
+        report = report.strip()
+
         logger.info(
             "Research report generated successfully."
         )
 
-        return report.strip()
+        return report
 
     except Exception:
 

@@ -1,10 +1,22 @@
+
+streamlit
 langchain
 langchain-core
 langchain-ollama
+langchain-groq
+langchain-huggingface
 langgraph
 chromadb
 pydantic
 json-repair
-streamlit
 rank-bm25
 ddgs
+sentence-transformers
+
+# PDF ingestion
+llama-index-core
+llama-index-readers-file
+llama-index-embeddings-ollama
+
+# PDF support
+pypdf
