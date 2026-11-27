@@ -1,9 +1,5 @@
-import streamlit as st
-import chromadb
-from pathlib import Path
-import tempfile
-import logging
-import hashlib
+from ingestion import ingest_pdf
+from graph import research_graph, refresh_retriever
 from config import (
     CHROMA_DB_PATH,
     UPLOAD_COLLECTION_NAME,
@@ -12,29 +8,44 @@ from config import (
     LLM_MODEL,
     EMBEDDING_MODEL
 )
-from graph import research_graph, refresh_retriever
-from ingestion import ingest_pdf
+import hashlib
+import logging
+import tempfile
+from pathlib import Path
+import chromadb
+import streamlit as st
 import nltk
 import os
+import stat
 
-# Use a writable directory for NLTK data on Streamlit Cloud.
+# Configure a private, writable NLTK directory
 NLTK_DATA_DIR = "/tmp/nltk_data"
 
+# Restrict permissions for newly created files and folders
+os.umask(0o077)
+
 os.makedirs(NLTK_DATA_DIR, exist_ok=True)
-os.environ["NLTK_DATA"] = NLTK_DATA_DIR
+os.chmod(NLTK_DATA_DIR, stat.S_IRWXU)
 
 
 if NLTK_DATA_DIR not in nltk.data.path:
     nltk.data.path.insert(0, NLTK_DATA_DIR)
 
+# Download stopwords if missing
 try:
     nltk.data.find("corpora/stopwords")
 except LookupError:
-    nltk.download(
+    success = nltk.download(
         "stopwords",
         download_dir=NLTK_DATA_DIR,
-        quiet=True
+        quiet=True,
+        force=True
     )
+
+    if not success:
+        raise RuntimeError("Failed to download NLTK stopwords.")
+
+    nltk.data.find("corpora/stopwords")
 
 
 # ==========================================
