@@ -53,10 +53,16 @@ class RAGRetriever:
         "nn": {"neural", "network"},
     }
 
+    # ==========================================
+    # 1. INITIALIZATION
+    # ==========================================
+
     def __init__(self):
 
         self._lock = threading.RLock()
 
+        # Create ONE persistent client.
+        # Do not recreate this client on every retrieval.
         self.client = chromadb.PersistentClient(
             path=str(CHROMA_DB_PATH)
         )
@@ -69,8 +75,9 @@ class RAGRetriever:
         self.document_map = {}
         self.bm25 = None
 
-        # Initialize the embedding model only once.
+        # Initialize embedding model only once.
         if IS_CLOUD:
+
             self.embeddings = HuggingFaceEmbeddings(
                 model_name=EMBEDDING_MODEL,
                 model_kwargs={"device": "cpu"},
@@ -78,7 +85,9 @@ class RAGRetriever:
                     "normalize_embeddings": True
                 }
             )
+
         else:
+
             self.embeddings = OllamaEmbeddings(
                 model=EMBEDDING_MODEL
             )
@@ -86,28 +95,29 @@ class RAGRetriever:
         self.refresh_collection()
 
     # ==========================================
-    # 1. REFRESH CHROMADB COLLECTION AND CACHE
+    # 2. REFRESH COLLECTION AND DOCUMENT CACHE
     # ==========================================
 
     def refresh_collection(self):
         """
-        Reacquire the collection by name and reload its
-        documents, IDs, and metadata.
+        Reacquire the active collection by name.
 
-        This avoids continuing to use an old collection
-        object after the collection has been replaced.
+        Reload documents, IDs, and metadata so that
+        the BM25 index and vector collection stay
+        synchronized.
         """
 
         with self._lock:
 
-            self.client = chromadb.PersistentClient(
-                path=str(CHROMA_DB_PATH)
-            )
+            # IMPORTANT:
+            # Reuse the existing PersistentClient.
+            # Do not create another client here.
 
             self.collection = self.client.get_or_create_collection(
                 name=UPLOAD_COLLECTION_NAME
             )
 
+            # Read the current collection contents.
             stored = self.collection.get(
                 include=["documents", "metadatas"]
             )
@@ -116,6 +126,7 @@ class RAGRetriever:
             self.ids = stored.get("ids") or []
             self.metadatas = stored.get("metadatas") or []
 
+            # Rebuild document lookup.
             self.document_map = {
                 doc_id: {
                     "text": doc,
@@ -128,43 +139,89 @@ class RAGRetriever:
                 )
             }
 
+            # Rebuild BM25 index.
             if self.documents:
+
                 tokenized_docs = [
                     self.tokenize(doc)
                     for doc in self.documents
                 ]
+
                 self.bm25 = BM25Okapi(tokenized_docs)
+
             else:
+
                 self.bm25 = None
 
+            # Diagnostic logging.
             logger.info(
-                "ChromaDB collection refreshed. "
-                "Collection=%s, chunks=%d",
+                "CHROMA REFRESH | Collection=%s | ID=%s | Chunks=%d",
                 UPLOAD_COLLECTION_NAME,
+                self.collection.id,
                 len(self.documents)
+            )
+
+            logger.info(
+                "CHROMA PATH: %s",
+                CHROMA_DB_PATH
             )
 
             return len(self.documents)
 
     # ==========================================
-    # 2. TOKEN NORMALIZATION
+    # 3. GET CURRENT COLLECTION BEFORE QUERY
+    # ==========================================
+
+    def get_live_collection(self):
+        """
+        Obtain a fresh collection handle using the
+        collection name immediately before querying.
+
+        This avoids relying only on an old cached
+        collection object.
+        """
+
+        with self._lock:
+
+            live_collection = self.client.get_collection(
+                name=UPLOAD_COLLECTION_NAME
+            )
+
+            live_count = live_collection.count()
+
+            logger.info(
+                "CHROMA LIVE CHECK | Name=%s | ID=%s | Count=%d",
+                UPLOAD_COLLECTION_NAME,
+                live_collection.id,
+                live_count
+            )
+
+            self.collection = live_collection
+
+            return live_collection
+
+    # ==========================================
+    # 4. TOKEN NORMALIZATION
     # ==========================================
 
     def normalize_token(self, token):
 
         if len(token) > 5 and token.endswith("ing"):
+
             token = token[:-3]
 
         elif len(token) > 4 and token.endswith("ed"):
+
             token = token[:-2]
 
         elif len(token) > 4 and token.endswith("s"):
+
             token = token[:-1]
 
         return token
 
     # ==========================================
-    # 3. TOKENIZE TEXT
+    # 5. TOKENIZATION
     # ==========================================
 
     def tokenize(self, text):
@@ -181,12 +238,13 @@ class RAGRetriever:
         ]
 
     # ==========================================
-    # 4. EXTRACT QUERY KEYWORDS
+    # 6. EXTRACT QUERY KEYWORDS
     # ==========================================
 
     def extract_keywords(self, text):
 
         tokens = self.tokenize(text)
+
         keywords = set()
 
         for token in tokens:
@@ -202,6 +260,7 @@ class RAGRetriever:
             )
 
             for alias in aliases:
+
                 keywords.add(
                     self.normalize_token(alias)
                 )
@@ -209,7 +268,7 @@ class RAGRetriever:
         return keywords
 
     # ==========================================
-    # 5. SPLIT DOCUMENT INTO SENTENCES
+    # 7. SPLIT DOCUMENT INTO SENTENCES
     # ==========================================
 
     def get_explanatory_sentences(self, document):
@@ -241,7 +300,7 @@ class RAGRetriever:
         return explanatory_sentences
 
     # ==========================================
-    # 6. CHECK DOCUMENT RELEVANCE
+    # 8. CHECK DOCUMENT RELEVANCE
     # ==========================================
 
     def is_relevant(self, question, document):
@@ -263,6 +322,7 @@ class RAGRetriever:
         document_keywords = set()
 
         for sentence in explanatory_sentences:
+
             document_keywords.update(
                 self.extract_keywords(sentence)
             )
@@ -295,6 +355,7 @@ class RAGRetriever:
             )
 
             if len(sentence_matches) >= 2:
+
                 strong_sentence_match = True
                 break
 
@@ -305,8 +366,8 @@ class RAGRetriever:
         )
 
         logger.debug(
-            "Relevance: matches=%d, ratio=%.3f, "
-            "strong_sentence=%s, relevant=%s",
+            "RELEVANCE | Matches=%d | Ratio=%.3f | "
+            "Strong sentence=%s | Relevant=%s",
             match_count,
             overlap_ratio,
             strong_sentence_match,
@@ -316,17 +377,20 @@ class RAGRetriever:
         return relevant
 
     # ==========================================
-    # 7. INTERNAL RETRIEVAL
+    # 9. INTERNAL HYBRID RETRIEVAL
     # ==========================================
 
     def _retrieve_from_current_collection(self, question):
 
         if not self.documents:
+
             raise ValueError(
                 "No uploaded PDF found. Please upload a PDF first."
             )
 
+        # --------------------------------------
         # STEP 1: BM25 KEYWORD SEARCH
+        # --------------------------------------
 
         bm25_ranked = []
 
@@ -352,7 +416,9 @@ class RAGRetriever:
                 reverse=True
             )
 
+        # --------------------------------------
         # STEP 2: VECTOR SEMANTIC SEARCH
+        # --------------------------------------
 
         query_embedding = self.embeddings.embed_query(
             question
@@ -363,7 +429,33 @@ class RAGRetriever:
             len(self.documents)
         )
 
-        vector_results = self.collection.query(
+        # IMPORTANT:
+        # Obtain a fresh collection handle immediately
+        # before executing the vector query.
+
+        live_collection = self.get_live_collection()
+
+        live_count = live_collection.count()
+
+        if live_count == 0:
+
+            raise ValueError(
+                "The ChromaDB collection is empty. "
+                "Please upload the PDF again."
+            )
+
+        candidate_count = min(
+            candidate_count,
+            live_count
+        )
+
+        logger.info(
+            "VECTOR QUERY | Collection ID=%s | Candidates=%d",
+            live_collection.id,
+            candidate_count
+        )
+
+        vector_results = live_collection.query(
             query_embeddings=[query_embedding],
             n_results=candidate_count,
             include=["distances"]
@@ -375,10 +467,13 @@ class RAGRetriever:
             else []
         )
 
+        # --------------------------------------
         # STEP 3: RECIPROCAL RANK FUSION
+        # --------------------------------------
 
         rrf_scores = {}
 
+        # BM25 rankings.
         for rank, doc_index in enumerate(
             bm25_ranked,
             start=1
@@ -391,6 +486,7 @@ class RAGRetriever:
                 + 1 / (60 + rank)
             )
 
+        # Vector rankings.
         for rank, doc_id in enumerate(
             vector_ids,
             start=1
@@ -401,7 +497,9 @@ class RAGRetriever:
                 + 1 / (60 + rank)
             )
 
+        # --------------------------------------
         # STEP 4: COMBINE RANKINGS
+        # --------------------------------------
 
         ranked_ids = sorted(
             rrf_scores,
@@ -409,7 +507,9 @@ class RAGRetriever:
             reverse=True
         )
 
+        # --------------------------------------
         # STEP 5: RELEVANCE FILTER
+        # --------------------------------------
 
         relevant_results = []
 
@@ -431,37 +531,52 @@ class RAGRetriever:
             metadata = item["metadata"]
 
             relevant_results.append({
+
                 "id": doc_id,
+
                 "text": document_text,
+
                 "source": metadata.get(
                     "file_name",
                     "Unknown source"
                 ),
+
                 "page": metadata.get(
                     "page_label",
                     "Unknown page"
                 ),
+
                 "score": rrf_scores[doc_id],
+
                 "relevant": True
+
             })
 
             if len(relevant_results) >= TOP_K:
                 break
 
+        # --------------------------------------
+        # STEP 6: RETURN RESULTS
+        # --------------------------------------
+
         logger.info(
-            "Retrieved %d relevant PDF chunks.",
+            "HYBRID RETRIEVAL COMPLETE | "
+            "BM25=%d | Vector=%d | Relevant=%d",
+            len(bm25_ranked),
+            len(vector_ids),
             len(relevant_results)
         )
 
         return relevant_results
 
     # ==========================================
-    # 8. PUBLIC RETRIEVAL METHOD
+    # 10. PUBLIC RETRIEVAL METHOD
     # ==========================================
 
     def retrieve(self, question):
 
         if not question or not question.strip():
+
             raise ValueError(
                 "Question cannot be empty."
             )
@@ -470,11 +585,11 @@ class RAGRetriever:
 
         with self._lock:
 
-            # Always reacquire the collection and reload
-            # the latest uploaded PDF chunks first.
+            # Always refresh the collection and document cache.
             self.refresh_collection()
 
             if not self.documents:
+
                 raise ValueError(
                     "No uploaded PDF found. Please upload a PDF first."
                 )
@@ -489,29 +604,45 @@ class RAGRetriever:
 
                 error_message = str(first_error).lower()
 
-                # Retry only when ChromaDB reports that
-                # the collection reference is missing.
                 missing_collection = (
                     "does not exist" in error_message
                     or "not found" in error_message
                 )
 
                 if not missing_collection:
+
+                    logger.exception(
+                        "PDF retrieval failed for a non-collection error."
+                    )
+
                     raise
 
                 logger.warning(
-                    "ChromaDB collection reference appears stale. "
-                    "Refreshing and retrying once."
+                    "STALE COLLECTION DETECTED. "
+                    "Refreshing collection and retrying once."
                 )
 
+                # Refresh collection and document cache.
                 self.refresh_collection()
 
                 if not self.documents:
+
                     raise ValueError(
-                        "The ChromaDB collection exists but contains "
-                        "no uploaded PDF chunks."
+                        "The ChromaDB collection exists but "
+                        "contains no uploaded PDF chunks."
                     ) from first_error
 
-                return self._retrieve_from_current_collection(
-                    question
-                )
+                # Retry once using the newly acquired collection.
+                try:
+
+                    return self._retrieve_from_current_collection(
+                        question
+                    )
+
+                except Exception:
+
+                    logger.exception(
+                        "PDF retrieval failed again after collection refresh."
+                    )
+
+                    raise
