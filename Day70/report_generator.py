@@ -112,9 +112,18 @@ PDF FINDINGS:
 WEB FINDINGS:
 
 - Use only information from WEB EVIDENCE.
-- Include the source title and URL when supplied.
-- Use publication dates only when explicitly provided.
-- Do not describe undated information as the latest development.
+- Present web findings as numbered points, NOT as a Markdown table.
+- Each numbered point must contain a specific finding supported by
+  the supplied web evidence.
+- Include the source title and exact URL when supplied.
+- Include publication dates only when explicitly supplied.
+- Put the citation immediately after the finding.
+- Keep each finding self-contained and concise.
+- If multiple sources support one finding, cite each relevant source.
+- Do not create empty table rows, placeholder rows, or blank cells.
+- Do not invent titles, URLs, dates, authors, or source details.
+- If the evidence contains no usable URL, say "URL not supplied".
+- Do not combine unrelated search results into one finding.
 - Do not include PDF information in this section.
 
 COMPARISON:
@@ -180,11 +189,18 @@ If no PDF evidence exists, state that clearly.
 
 ## 3. Web Findings
 
-Explain the relevant findings from web research.
+Present relevant web research as a numbered list.
 
-Include only information supported by web evidence.
+For each finding:
+- State the supported finding in clear language.
+- Include the source title and exact URL when supplied.
+- Include the publication date only when supplied.
+- Put the citation directly after the finding.
 
-Cite the actual sources.
+Do not use a table in this section. Do not leave incomplete
+rows, blank cells, or placeholder entries.
+
+If no web evidence exists, state that clearly.
 
 If no web evidence exists, state that clearly.
 
@@ -254,6 +270,12 @@ Remove any claim that is not supported.
 Make sure PDF and web findings are separated.
 
 Make sure citations are accurate.
+
+Before returning the report:
+- Check that every Web Findings item is a complete numbered point.
+- Check that each supplied web URL is copied exactly.
+- Do not output a Web Findings table.
+- Remove incomplete sentences, empty list items, and unfinished tables.
 
 Now answer the user's exact question.
 """
