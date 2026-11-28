@@ -1,9 +1,8 @@
 
 import logging
-from typing import List
+from typing import List, Any
 
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
 
 from llm_factory import get_chat_model
 
@@ -30,8 +29,8 @@ prompt = ChatPromptTemplate.from_template(
     """
 You are an evidence-grounded AI research assistant.
 
-Your task is to answer the user's exact research question
-using only the evidence supplied below.
+Answer the user's exact research question using the evidence
+provided below.
 
 Accuracy, relevance and source attribution are more important
 than report length.
@@ -42,13 +41,11 @@ USER QUESTION
 
 {question}
 
-
 ==================================================
 PDF EVIDENCE
 ==================================================
 
 {rag_context}
-
 
 ==================================================
 WEB EVIDENCE
@@ -56,43 +53,27 @@ WEB EVIDENCE
 
 {web_context}
 
-
 ==================================================
 AVAILABLE SOURCES
 ==================================================
 
 {sources}
 
-
 ==================================================
 1. STRICT EVIDENCE RULES
 ==================================================
 
-Follow these rules throughout the entire report:
-
 1. Use only information supported by the supplied evidence.
-
-2. Never invent facts, statistics, dates, examples, findings,
-   technical concepts, research developments or comparisons.
-
-3. Do not introduce a concept simply because it is related
-   to the user's question.
-
-4. Do not treat a source title or URL as proof of a claim.
-   The actual evidence must support the claim.
-
-5. Do not use general knowledge to fill gaps in the evidence.
-
-6. If information is missing, explicitly say:
+2. Never invent facts, statistics, dates, examples or findings.
+3. Do not introduce unrelated concepts.
+4. A source title or URL alone is not proof of a claim.
+5. Do not use general knowledge to fill evidence gaps.
+6. If information is missing, say:
    "The supplied evidence does not establish this."
-
-7. Do not repeat the same information in different sections.
-
-8. Do not write generic filler or unnecessary introductions.
-
-9. Do not make unsupported claims about improvements,
-   performance, accuracy, efficiency or advantages.
-
+7. Avoid repeating the same information.
+8. Do not write generic filler.
+9. Do not make unsupported claims about performance,
+   accuracy, efficiency or advantages.
 10. Do not claim that a source supports something it does not
     actually discuss.
 
@@ -100,39 +81,32 @@ Follow these rules throughout the entire report:
 2. PDF AND WEB SEPARATION
 ==================================================
 
-Keep PDF and web information clearly separated.
-
 PDF FINDINGS:
 
 - Use only information from PDF EVIDENCE.
 - Mention the exact PDF filename and page number when available.
 - Do not include web information in this section.
-- Do not invent page numbers.
+- Never invent page numbers.
 
 WEB FINDINGS:
 
 - Use only information from WEB EVIDENCE.
-- Present web findings as numbered points, NOT as a Markdown table.
-- Each numbered point must contain a specific finding supported by
-  the supplied web evidence.
+- Present findings as numbered points, not a Markdown table.
+- Each point must contain a specific supported finding.
 - Include the source title and exact URL when supplied.
 - Include publication dates only when explicitly supplied.
-- Put the citation immediately after the finding.
-- Keep each finding self-contained and concise.
-- If multiple sources support one finding, cite each relevant source.
-- Do not create empty table rows, placeholder rows, or blank cells.
-- Do not invent titles, URLs, dates, authors, or source details.
-- If the evidence contains no usable URL, say "URL not supplied".
-- Do not combine unrelated search results into one finding.
+- Put citations immediately after the relevant finding.
+- Do not invent titles, URLs, dates or authors.
+- If no usable URL is supplied, say "URL not supplied".
+- Do not combine unrelated search results.
 - Do not include PDF information in this section.
 
 COMPARISON:
 
-- Compare PDF findings with web findings only when both
-  sources provide evidence for the same topic.
-- Clearly explain similarities and differences.
+- Compare PDF and web findings only when both provide
+  evidence about the same topic.
+- Explain similarities and differences only when supported.
 - Do not manufacture comparisons.
-- If the evidence does not support a comparison, say so.
 
 ==================================================
 3. CITATION RULES
@@ -140,15 +114,11 @@ COMPARISON:
 
 Every important factual statement must have supporting evidence.
 
-For PDF information:
-
-Use this format:
+For PDF information, use:
 
 (Source: filename, Page X)
 
-For web information:
-
-Use this format:
+For web information, use:
 
 (Source: article title, URL)
 
@@ -157,33 +127,29 @@ Important:
 - Use only references present in AVAILABLE SOURCES.
 - Do not invent URLs, titles, dates or page numbers.
 - Do not cite unrelated sources.
-- Place citations immediately after the relevant statements.
-- Do not create fake references.
-- If the exact supporting reference is unavailable,
+- Put citations immediately after relevant statements.
+- If an exact supporting reference is unavailable,
   state that the claim cannot be verified.
 
 ==================================================
 4. REPORT STRUCTURE
 ==================================================
 
-Use the following structure when appropriate.
-
 # Research Report
 
 ## 1. Direct Answer
 
 Answer the user's question directly in a short paragraph.
-
-Do not provide a generic introduction.
+Avoid a generic introduction.
 
 ## 2. PDF Findings
 
-Explain the important findings from the uploaded document.
+Explain important findings from the uploaded document.
 
-Use numbered points when appropriate.
+Use numbered points where appropriate.
 
-Every point must be supported by PDF evidence
-and include its relevant page citation.
+Every point must be supported by PDF evidence and include
+its relevant page citation.
 
 If no PDF evidence exists, state that clearly.
 
@@ -192,51 +158,39 @@ If no PDF evidence exists, state that clearly.
 Present relevant web research as a numbered list.
 
 For each finding:
-- State the supported finding in clear language.
+- State the supported finding clearly.
 - Include the source title and exact URL when supplied.
-- Include the publication date only when supplied.
-- Put the citation directly after the finding.
+- Include publication dates only when supplied.
+- Put the citation immediately after the finding.
 
-Do not use a table in this section. Do not leave incomplete
-rows, blank cells, or placeholder entries.
-
-If no web evidence exists, state that clearly.
+Do not use a table in this section.
 
 If no web evidence exists, state that clearly.
 
 ## 4. Comparison and Analysis
 
-Include this section only if the user asks for a comparison
-or if comparison is necessary to answer the question.
-
-Use a table when it makes the comparison clearer.
+Include this section only if the user asks for comparison
+or comparison is necessary to answer the question.
 
 Compare only points supported by both evidence sets.
 
-Do not introduce unrelated concepts.
-
 ## 5. Evidence Limitations
 
-Mention only meaningful limitations.
-
+Mention meaningful limitations.
 Explain what information is missing or cannot be verified.
-
-Do not invent limitations.
 
 ## 6. Conclusion
 
 Summarize the answer in a few sentences.
-
 Do not introduce new information.
 
 ## 7. References
 
-List only the sources actually used.
-
+List only sources actually used.
 Use the exact source details supplied.
 
 ==================================================
-5. SPECIAL INSTRUCTIONS FOR RECENT DEVELOPMENTS
+5. RECENT DEVELOPMENTS
 ==================================================
 
 When the user asks about recent developments:
@@ -244,10 +198,8 @@ When the user asks about recent developments:
 - Prioritize relevant web evidence.
 - Use dates only when explicitly supplied.
 - Distinguish confirmed developments from general explanations.
-- Do not call an old or undated article a 2026 development.
+- Do not call an old or undated article a recent development.
 - Do not invent future trends or predictions.
-- Do not assume that a development is new simply because
-  it appears in a search result.
 
 ==================================================
 6. WRITING QUALITY
@@ -257,25 +209,24 @@ When the user asks about recent developments:
 - Explain technical concepts without changing their meaning.
 - Avoid unnecessary repetition.
 - Keep the report proportional to the question.
-- Prefer concise explanations over lengthy generic content.
+- Prefer concise explanations over generic content.
 - Use headings and bullet points for readability.
 - Never add unsupported information to make the report longer.
 
-FINAL CHECK BEFORE ANSWERING:
+FINAL CHECK:
 
-Check every factual claim against the supplied evidence.
+- Check every factual claim against supplied evidence.
+- Keep PDF and web findings separate.
+- Check that citations are accurate.
+- Ensure every web finding is a complete numbered point.
+- Copy supplied URLs exactly.
+- Remove incomplete sentences and empty list items.
 
-Remove any claim that is not supported.
+IMPORTANT OUTPUT REQUIREMENT:
 
-Make sure PDF and web findings are separated.
-
-Make sure citations are accurate.
-
-Before returning the report:
-- Check that every Web Findings item is a complete numbered point.
-- Check that each supplied web URL is copied exactly.
-- Do not output a Web Findings table.
-- Remove incomplete sentences, empty list items, and unfinished tables.
+You must return a non-empty research report.
+If the evidence is insufficient, explain the limitation instead
+of returning an empty response.
 
 Now answer the user's exact question.
 """
@@ -283,18 +234,7 @@ Now answer the user's exact question.
 
 
 # ==========================================
-# 4. REPORT GENERATION CHAIN
-# ==========================================
-
-report_chain = (
-    prompt
-    | llm
-    | StrOutputParser()
-)
-
-
-# ==========================================
-# 5. FORMAT SOURCES
+# 4. FORMAT SOURCES
 # ==========================================
 
 def format_sources(sources: List[str]) -> str:
@@ -318,6 +258,61 @@ def format_sources(sources: List[str]) -> str:
             start=1
         )
     )
+
+
+# ==========================================
+# 5. EXTRACT TEXT FROM MODEL RESPONSE
+# ==========================================
+
+def extract_response_text(response: Any) -> str:
+    """
+    Extract text safely from a LangChain AIMessage.
+
+    Supports:
+    - Normal string content
+    - List of text blocks
+    - Dictionary-based content blocks
+    """
+
+    content = getattr(response, "content", response)
+
+    if isinstance(content, str):
+        return content.strip()
+
+    if isinstance(content, list):
+
+        text_parts = []
+
+        for block in content:
+
+            if isinstance(block, str):
+
+                text_parts.append(block)
+
+            elif isinstance(block, dict):
+
+                block_type = block.get("type")
+
+                if block_type in ("text", None):
+
+                    block_text = block.get("text")
+
+                    if isinstance(block_text, str):
+                        text_parts.append(block_text)
+
+            else:
+
+                block_text = getattr(block, "text", None)
+
+                if isinstance(block_text, str):
+                    text_parts.append(block_text)
+
+        return "\n".join(text_parts).strip()
+
+    if content is None:
+        return ""
+
+    return str(content).strip()
 
 
 # ==========================================
@@ -354,7 +349,7 @@ def generate_report(
 
     pdf_evidence = (
         rag_context.strip()
-        if rag_context and rag_context.strip()
+        if isinstance(rag_context, str) and rag_context.strip()
         else "No relevant PDF evidence was retrieved."
     )
 
@@ -364,7 +359,7 @@ def generate_report(
 
     external_evidence = (
         web_context.strip()
-        if web_context and web_context.strip()
+        if isinstance(web_context, str) and web_context.strip()
         else "No relevant web evidence was retrieved."
     )
 
@@ -372,42 +367,116 @@ def generate_report(
     # PREPARE SOURCE REFERENCES
     # --------------------------------------
 
-    formatted_sources = format_sources(
-        sources
-    )
+    formatted_sources = format_sources(sources)
 
     # --------------------------------------
-    # GENERATE REPORT
+    # PREPARE PROMPT MESSAGES
     # --------------------------------------
 
     try:
 
-        logger.info(
-            "Sending evidence to the language model."
+        messages = prompt.format_messages(
+
+            question=question,
+
+            rag_context=pdf_evidence,
+
+            web_context=external_evidence,
+
+            sources=formatted_sources
+
         )
 
-        report = report_chain.invoke({
+        logger.info(
+            "Prompt prepared. PDF evidence length=%d, "
+            "Web evidence length=%d, Sources=%d",
+            len(pdf_evidence),
+            len(external_evidence),
+            len(sources or [])
+        )
 
-            "question": question,
+        # ----------------------------------
+        # CALL MODEL DIRECTLY
+        # ----------------------------------
 
-            "rag_context": pdf_evidence,
+        logger.info(
+            "Sending report-generation request to LLM."
+        )
 
-            "web_context": external_evidence,
+        response = llm.invoke(messages)
 
-            "sources": formatted_sources
+        # ----------------------------------
+        # LOG RAW RESPONSE DETAILS
+        # ----------------------------------
 
-        })
+        response_metadata = getattr(
+            response,
+            "response_metadata",
+            {}
+        )
 
-        if not report or not report.strip():
+        additional_kwargs = getattr(
+            response,
+            "additional_kwargs",
+            {}
+        )
+
+        logger.info(
+            "RAW RESPONSE TYPE: %s",
+            type(response).__name__
+        )
+
+        logger.info(
+            "RAW RESPONSE METADATA: %s",
+            response_metadata
+        )
+
+        logger.info(
+            "RAW RESPONSE ADDITIONAL KWARGS: %s",
+            additional_kwargs
+        )
+
+        # ----------------------------------
+        # EXTRACT RESPONSE TEXT
+        # ----------------------------------
+
+        report = extract_response_text(response)
+
+        logger.info(
+            "EXTRACTED REPORT LENGTH: %d",
+            len(report)
+        )
+
+        if not report:
+
+            logger.error(
+                "LLM returned empty content. "
+                "Response metadata=%s",
+                response_metadata
+            )
 
             raise ValueError(
-                "The language model returned an empty report."
+                "The language model returned empty content. "
+                "Check the model response metadata and finish reason."
             )
+
+        # ----------------------------------
+        # FINAL VALIDATION
+        # ----------------------------------
 
         report = report.strip()
 
+        if len(report) < 10:
+
+            logger.warning(
+                "LLM returned an unusually short report: %r",
+                report
+            )
+
         logger.info(
-            "Research report generated successfully."
+            "Research report generated successfully. "
+            "Characters=%d",
+            len(report)
         )
 
         return report
