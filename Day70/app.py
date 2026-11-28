@@ -1,3 +1,7 @@
+# ==========================================
+# 1. STANDARD LIBRARY IMPORTS
+# ==========================================
+
 from graph import research_graph, refresh_retriever
 from ingestion import ingest_pdf
 from config import (
@@ -8,9 +12,6 @@ from config import (
     LLM_MODEL,
     EMBEDDING_MODEL
 )
-import chromadb
-import streamlit as st
-import nltk
 import os
 import stat
 import logging
@@ -18,62 +19,65 @@ import tempfile
 import hashlib
 from pathlib import Path
 
+import nltk
+import streamlit as st
+import chromadb
+
+
 # ==========================================
-# NLTK CLOUD-SAFE INITIALIZATION
-# IMPORTANT: Run this BEFORE importing
-# ingestion, graph, or any LlamaIndex module.
+# 2. NLTK CLOUD-SAFE INITIALIZATION
+# IMPORTANT: Run BEFORE importing graph
+# or ingestion modules.
 # ==========================================
 
 NLTK_DATA_DIR = Path.home() / ".cache" / "nltk_data"
 NLTK_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-# NLTK refuses to trust data in directories
-# that are writable by other users.
 try:
-    NLTK_DATA_DIR.chmod(stat.S_IRWXU)  # owner: read/write/execute only
+    NLTK_DATA_DIR.chmod(stat.S_IRWXU)
 except OSError:
     pass
 
-# Create downloaded files as owner-only.
 os.umask(0o077)
 
 os.environ["NLTK_DATA"] = str(NLTK_DATA_DIR)
 
-
-# Search the private directory first.
 private_nltk_path = str(NLTK_DATA_DIR)
+
 if private_nltk_path in nltk.data.path:
     nltk.data.path.remove(private_nltk_path)
+
 nltk.data.path.insert(0, private_nltk_path)
 
-# Ensure stopwords exist in THIS private directory.
 try:
     nltk.data.find(
         "corpora/stopwords",
         paths=[private_nltk_path]
     )
+
 except LookupError:
+
     downloaded = nltk.download(
         "stopwords",
         download_dir=private_nltk_path,
         quiet=True
     )
+
     if not downloaded:
         raise RuntimeError(
-            "Could not download the NLTK stopwords resource. "
-            "Check Streamlit Cloud network access and app logs."
+            "Could not download NLTK stopwords. "
+            "Check Streamlit Cloud network access."
         )
 
-    # Verify the resource was installed in the private directory.
     nltk.data.find(
         "corpora/stopwords",
         paths=[private_nltk_path]
     )
 
-# ==========================================
-# STREAMLIT AND PROJECT IMPORTS
-# ==========================================
 
+# ==========================================
+# 3. STREAMLIT CONFIGURATION
+# ==========================================
 
 st.set_page_config(
     page_title="AI Research Assistant",
@@ -82,13 +86,13 @@ st.set_page_config(
 )
 
 
-# ==========================================\n# STREAMLIT CONFIGURATION ALREADY SET ABOVE\n# ==========================================\n\n# ==========================================
-# 2. IMPORT PROJECT MODULES
+# ==========================================
+# 4. PROJECT IMPORTS
 # ==========================================
 
 
 # ==========================================
-# 3. LOGGING
+# 5. LOGGING
 # ==========================================
 
 logging.basicConfig(level=logging.INFO)
@@ -97,15 +101,16 @@ logger = logging.getLogger("research-assistant")
 
 
 # ==========================================
-# 4. SAFE PDF REPLACEMENT
+# 6. SAFE PDF REPLACEMENT
 # ==========================================
 
 def replace_uploaded_pdf(pdf_path, original_filename):
     """
     Ingest a new PDF into a staging collection.
 
-    Replace the active collection only after successful ingestion.
-    Restore the previous collection if replacement fails.
+    Preserve the active ChromaDB collection identity.
+    Replace its records only after successful ingestion.
+    Restore previous records if replacement fails.
     """
 
     client = chromadb.PersistentClient(
@@ -114,7 +119,10 @@ def replace_uploaded_pdf(pdf_path, original_filename):
 
     staging_name = f"{UPLOAD_COLLECTION_NAME}_staging"
 
-    # Remove leftover staging collection
+    # --------------------------------------
+    # REMOVE OLD STAGING COLLECTION
+    # --------------------------------------
+
     try:
         client.delete_collection(name=staging_name)
     except Exception:
@@ -162,44 +170,35 @@ def replace_uploaded_pdf(pdf_path, original_filename):
         # STEP 3: BACK UP ACTIVE COLLECTION
         # ----------------------------------
 
-        backup_data = None
+        active = client.get_or_create_collection(
+            name=UPLOAD_COLLECTION_NAME
+        )
 
-        try:
-
-            active = client.get_collection(
-                name=UPLOAD_COLLECTION_NAME
-            )
-
-            backup_data = active.get(
-                include=[
-                    "documents",
-                    "metadatas",
-                    "embeddings"
-                ]
-            )
-
-        except Exception:
-
-            logger.info(
-                "No previous PDF collection found."
-            )
+        backup_data = active.get(
+            include=[
+                "documents",
+                "metadatas",
+                "embeddings"
+            ]
+        )
 
         # ----------------------------------
-        # STEP 4: REPLACE ACTIVE COLLECTION
+        # STEP 4: REPLACE ACTIVE RECORDS
+        # IMPORTANT:
+        # Do NOT delete the collection itself.
         # ----------------------------------
 
         try:
 
-            try:
-                client.delete_collection(
-                    name=UPLOAD_COLLECTION_NAME
-                )
-            except Exception:
-                pass
+            old_ids = backup_data.get("ids", [])
 
-            active = client.create_collection(
-                name=UPLOAD_COLLECTION_NAME
-            )
+            # Delete existing records only.
+            # Keep the collection ID unchanged.
+
+            if old_ids:
+                active.delete(ids=old_ids)
+
+            # Insert newly staged records.
 
             active.upsert(
                 ids=staged_data["ids"],
@@ -208,13 +207,22 @@ def replace_uploaded_pdf(pdf_path, original_filename):
                 embeddings=staged_data["embeddings"]
             )
 
-            # Verify replacement
+            # Verify replacement.
+
             if active.count() != len(staged_data["ids"]):
                 raise ValueError(
                     "Active collection verification failed."
                 )
 
+            # Refresh the retriever after replacement.
+
             refresh_retriever()
+
+            logger.info(
+                "PDF collection replaced successfully. "
+                "Chunks: %s",
+                active.count()
+            )
 
         except Exception:
 
@@ -223,34 +231,37 @@ def replace_uploaded_pdf(pdf_path, original_filename):
             )
 
             # ----------------------------------
-            # STEP 5: RESTORE PREVIOUS DATA
+            # STEP 5: RESTORE PREVIOUS RECORDS
             # ----------------------------------
 
             try:
-                client.delete_collection(
-                    name=UPLOAD_COLLECTION_NAME
-                )
-            except Exception:
-                pass
 
-            if backup_data and backup_data["ids"]:
+                current_data = active.get()
 
-                restored = client.create_collection(
-                    name=UPLOAD_COLLECTION_NAME
-                )
+                current_ids = current_data.get("ids", [])
 
-                restored.upsert(
-                    ids=backup_data["ids"],
-                    documents=backup_data["documents"],
-                    metadatas=backup_data["metadatas"],
-                    embeddings=backup_data["embeddings"]
-                )
+                if current_ids:
+                    active.delete(ids=current_ids)
 
-            try:
+                if backup_data and backup_data.get("ids"):
+
+                    active.upsert(
+                        ids=backup_data["ids"],
+                        documents=backup_data["documents"],
+                        metadatas=backup_data["metadatas"],
+                        embeddings=backup_data["embeddings"]
+                    )
+
                 refresh_retriever()
+
+                logger.info(
+                    "Previous PDF data restored successfully."
+                )
+
             except Exception:
+
                 logger.exception(
-                    "Could not refresh retriever after restoration."
+                    "Could not restore previous PDF data."
                 )
 
             raise
@@ -286,7 +297,7 @@ def replace_uploaded_pdf(pdf_path, original_filename):
 
 
 # ==========================================
-# 5. APPLICATION HEADER
+# 7. APPLICATION HEADER
 # ==========================================
 
 st.title("🔬 AI Research Assistant")
@@ -304,7 +315,7 @@ st.markdown(
 
 
 # ==========================================
-# 6. LOAD GRAPH
+# 8. LOAD GRAPH
 # ==========================================
 
 @st.cache_resource
@@ -316,7 +327,7 @@ graph = load_graph()
 
 
 # ==========================================
-# 7. SESSION STATE
+# 9. SESSION STATE
 # ==========================================
 
 if "messages" not in st.session_state:
@@ -333,7 +344,7 @@ if "uploaded_pdf_chunks" not in st.session_state:
 
 
 # ==========================================
-# 8. SIDEBAR
+# 10. SIDEBAR
 # ==========================================
 
 with st.sidebar:
@@ -357,7 +368,8 @@ with st.sidebar:
 
         pdf_bytes = uploaded_file.getvalue()
 
-        # Validate PDF signature
+        # Validate PDF signature.
+
         if not pdf_bytes.startswith(b"%PDF-"):
 
             st.error(
@@ -380,6 +392,8 @@ with st.sidebar:
                         "Processing PDF and generating embeddings..."
                     ):
 
+                        # Save uploaded PDF temporarily.
+
                         with tempfile.NamedTemporaryFile(
                             delete=False,
                             suffix=".pdf"
@@ -388,10 +402,14 @@ with st.sidebar:
                             temp_file.write(pdf_bytes)
                             temp_path = temp_file.name
 
+                        # Safely replace the existing PDF.
+
                         ingestion_result = replace_uploaded_pdf(
                             pdf_path=temp_path,
                             original_filename=uploaded_file.name
                         )
+
+                        # Save upload information.
 
                         st.session_state.uploaded_pdf_hash = file_hash
 
@@ -513,7 +531,7 @@ with st.sidebar:
 
 
 # ==========================================
-# 9. DISPLAY CHAT HISTORY
+# 11. DISPLAY CHAT HISTORY
 # ==========================================
 
 for message in st.session_state.messages:
@@ -524,7 +542,7 @@ for message in st.session_state.messages:
 
 
 # ==========================================
-# 10. USER INPUT
+# 12. USER INPUT
 # ==========================================
 
 question = st.chat_input(
@@ -533,7 +551,7 @@ question = st.chat_input(
 
 
 # ==========================================
-# 11. EXECUTE RESEARCH WORKFLOW
+# 13. EXECUTE RESEARCH WORKFLOW
 # ==========================================
 
 if question:
@@ -569,7 +587,7 @@ if question:
                 result = graph.invoke(initial_state)
 
             # ----------------------------------
-            # ACTUAL RESEARCH SOURCES USED
+            # RESEARCH SOURCES USED
             # ----------------------------------
 
             st.subheader("📋 Research Sources Used")
