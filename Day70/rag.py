@@ -1,6 +1,7 @@
 
 import re
 import logging
+import threading
 
 import chromadb
 
@@ -16,15 +17,10 @@ from config import (
     IS_CLOUD
 )
 
-
 logger = logging.getLogger("research-assistant.rag")
 
 
 class RAGRetriever:
-
-    # ==========================================
-    # 1. STOPWORDS
-    # ==========================================
 
     STOPWORDS = {
         "the", "is", "are", "was", "were", "be", "been",
@@ -43,12 +39,8 @@ class RAGRetriever:
         "only", "include", "relevant", "page", "number",
         "numbers", "according", "please", "main", "important",
         "information", "provide", "provided", "summarize",
-        "works", "work", "system", "systems", "explain"
+        "works", "work", "system", "systems"
     }
-
-    # ==========================================
-    # 2. TECHNICAL TERM ALIASES
-    # ==========================================
 
     TERM_ALIASES = {
         "rag": {"retrieval", "augmented", "generation"},
@@ -63,48 +55,22 @@ class RAGRetriever:
 
     def __init__(self):
 
-        # --------------------------------------
-        # CONNECT TO CHROMADB
-        # --------------------------------------
+        self._lock = threading.RLock()
 
         self.client = chromadb.PersistentClient(
             path=str(CHROMA_DB_PATH)
         )
 
-        self.collection = self.client.get_or_create_collection(
-            name=UPLOAD_COLLECTION_NAME
-        )
+        self.collection = None
 
-        # --------------------------------------
-        # LOAD DOCUMENTS AND METADATA
-        # --------------------------------------
+        self.documents = []
+        self.ids = []
+        self.metadatas = []
+        self.document_map = {}
+        self.bm25 = None
 
-        stored = self.collection.get(
-            include=["documents", "metadatas"]
-        )
-
-        self.documents = stored.get("documents") or []
-        self.ids = stored.get("ids") or []
-        self.metadatas = stored.get("metadatas") or []
-
-        self.document_map = {
-            doc_id: {
-                "text": doc,
-                "metadata": metadata or {}
-            }
-            for doc_id, doc, metadata in zip(
-                self.ids,
-                self.documents,
-                self.metadatas
-            )
-        }
-
-        # --------------------------------------
-        # INITIALIZE EMBEDDING MODEL
-        # --------------------------------------
-
+        # Initialize the embedding model only once.
         if IS_CLOUD:
-
             self.embeddings = HuggingFaceEmbeddings(
                 model_name=EMBEDDING_MODEL,
                 model_kwargs={"device": "cpu"},
@@ -112,67 +78,93 @@ class RAGRetriever:
                     "normalize_embeddings": True
                 }
             )
-
         else:
-
             self.embeddings = OllamaEmbeddings(
                 model=EMBEDDING_MODEL
             )
 
-        # --------------------------------------
-        # INITIALIZE BM25
-        # --------------------------------------
-
-        if self.documents:
-
-            tokenized_docs = [
-                self.tokenize(doc)
-                for doc in self.documents
-            ]
-
-            self.bm25 = BM25Okapi(tokenized_docs)
-
-        else:
-
-            self.bm25 = None
-
-        logger.info(
-            "RAG initialized with %d document chunks.",
-            len(self.documents)
-        )
+        self.refresh_collection()
 
     # ==========================================
-    # 3. TOKEN NORMALIZATION
+    # 1. REFRESH CHROMADB COLLECTION AND CACHE
+    # ==========================================
+
+    def refresh_collection(self):
+        """
+        Reacquire the collection by name and reload its
+        documents, IDs, and metadata.
+
+        This avoids continuing to use an old collection
+        object after the collection has been replaced.
+        """
+
+        with self._lock:
+
+            self.client = chromadb.PersistentClient(
+                path=str(CHROMA_DB_PATH)
+            )
+
+            self.collection = self.client.get_or_create_collection(
+                name=UPLOAD_COLLECTION_NAME
+            )
+
+            stored = self.collection.get(
+                include=["documents", "metadatas"]
+            )
+
+            self.documents = stored.get("documents") or []
+            self.ids = stored.get("ids") or []
+            self.metadatas = stored.get("metadatas") or []
+
+            self.document_map = {
+                doc_id: {
+                    "text": doc,
+                    "metadata": metadata or {}
+                }
+                for doc_id, doc, metadata in zip(
+                    self.ids,
+                    self.documents,
+                    self.metadatas
+                )
+            }
+
+            if self.documents:
+                tokenized_docs = [
+                    self.tokenize(doc)
+                    for doc in self.documents
+                ]
+                self.bm25 = BM25Okapi(tokenized_docs)
+            else:
+                self.bm25 = None
+
+            logger.info(
+                "ChromaDB collection refreshed. "
+                "Collection=%s, chunks=%d",
+                UPLOAD_COLLECTION_NAME,
+                len(self.documents)
+            )
+
+            return len(self.documents)
+
+    # ==========================================
+    # 2. TOKEN NORMALIZATION
     # ==========================================
 
     def normalize_token(self, token):
-        """
-        Normalize simple plural and verb forms.
-
-        Examples:
-        embeddings -> embedd
-        embedding  -> embedd
-        databases  -> database
-        chunks     -> chunk
-        chunking   -> chunk
-        """
 
         if len(token) > 5 and token.endswith("ing"):
-
             token = token[:-3]
 
         elif len(token) > 4 and token.endswith("ed"):
-
             token = token[:-2]
 
         elif len(token) > 4 and token.endswith("s"):
-
             token = token[:-1]
 
         return token
 
     # ==========================================
-    # 4. TOKENIZE TEXT
+    # 3. TOKENIZE TEXT
     # ==========================================
 
     def tokenize(self, text):
@@ -189,13 +181,12 @@ class RAGRetriever:
         ]
 
     # ==========================================
-    # 5. EXTRACT QUERY KEYWORDS
+    # 4. EXTRACT QUERY KEYWORDS
     # ==========================================
 
     def extract_keywords(self, text):
 
         tokens = self.tokenize(text)
-
         keywords = set()
 
         for token in tokens:
@@ -205,14 +196,12 @@ class RAGRetriever:
 
             keywords.add(token)
 
-            # Expand recognized abbreviations.
             aliases = self.TERM_ALIASES.get(
                 token,
                 set()
             )
 
             for alias in aliases:
-
                 keywords.add(
                     self.normalize_token(alias)
                 )
@@ -220,16 +209,10 @@ class RAGRetriever:
         return keywords
 
     # ==========================================
-    # 6. SPLIT DOCUMENT INTO SENTENCES
+    # 5. SPLIT DOCUMENT INTO SENTENCES
     # ==========================================
 
     def get_explanatory_sentences(self, document):
-        """
-        Exclude question-only sentences.
-
-        This helps distinguish an explanatory paragraph
-        from a list of example questions mentioning a topic.
-        """
 
         sentences = re.split(
             r"(?<=[.!?])\s+|\n+",
@@ -245,13 +228,11 @@ class RAGRetriever:
             if not sentence:
                 continue
 
-            # Ignore sentences that are questions.
             if sentence.endswith("?"):
                 continue
 
             tokens = self.tokenize(sentence)
 
-            # Ignore very short fragments and headings.
             if len(tokens) < 5:
                 continue
 
@@ -260,7 +241,7 @@ class RAGRetriever:
         return explanatory_sentences
 
     # ==========================================
-    # 7. CHECK DOCUMENT RELEVANCE
+    # 6. CHECK DOCUMENT RELEVANCE
     # ==========================================
 
     def is_relevant(self, question, document):
@@ -281,9 +262,7 @@ class RAGRetriever:
 
         document_keywords = set()
 
-        # Only use explanatory sentences for relevance.
         for sentence in explanatory_sentences:
-
             document_keywords.update(
                 self.extract_keywords(sentence)
             )
@@ -303,8 +282,6 @@ class RAGRetriever:
             match_count / len(question_keywords)
         )
 
-        # At least one explanatory sentence must
-        # contain two or more query concepts.
         strong_sentence_match = False
 
         for sentence in explanatory_sentences:
@@ -318,7 +295,6 @@ class RAGRetriever:
             )
 
             if len(sentence_matches) >= 2:
-
                 strong_sentence_match = True
                 break
 
@@ -340,28 +316,17 @@ class RAGRetriever:
         return relevant
 
     # ==========================================
-    # 8. HYBRID RETRIEVAL
+    # 7. INTERNAL RETRIEVAL
     # ==========================================
 
-    def retrieve(self, question):
-
-        if not question or not question.strip():
-
-            raise ValueError(
-                "Question cannot be empty."
-            )
+    def _retrieve_from_current_collection(self, question):
 
         if not self.documents:
-
             raise ValueError(
                 "No uploaded PDF found. Please upload a PDF first."
             )
 
-        question = question.strip()
-
-        # --------------------------------------
         # STEP 1: BM25 KEYWORD SEARCH
-        # --------------------------------------
 
         bm25_ranked = []
 
@@ -369,7 +334,6 @@ class RAGRetriever:
 
             query_tokens = self.tokenize(question)
 
-            # Add recognized technical aliases.
             query_tokens = list(
                 set(query_tokens)
                 | self.extract_keywords(question)
@@ -388,9 +352,7 @@ class RAGRetriever:
                 reverse=True
             )
 
-        # --------------------------------------
         # STEP 2: VECTOR SEMANTIC SEARCH
-        # --------------------------------------
 
         query_embedding = self.embeddings.embed_query(
             question
@@ -413,13 +375,10 @@ class RAGRetriever:
             else []
         )
 
-        # --------------------------------------
         # STEP 3: RECIPROCAL RANK FUSION
-        # --------------------------------------
 
         rrf_scores = {}
 
-        # BM25 rankings
         for rank, doc_index in enumerate(
             bm25_ranked,
             start=1
@@ -432,7 +391,6 @@ class RAGRetriever:
                 + 1 / (60 + rank)
             )
 
-        # Vector rankings
         for rank, doc_id in enumerate(
             vector_ids,
             start=1
@@ -443,9 +401,7 @@ class RAGRetriever:
                 + 1 / (60 + rank)
             )
 
-        # --------------------------------------
         # STEP 4: COMBINE RANKINGS
-        # --------------------------------------
 
         ranked_ids = sorted(
             rrf_scores,
@@ -453,9 +409,7 @@ class RAGRetriever:
             reverse=True
         )
 
-        # --------------------------------------
         # STEP 5: RELEVANCE FILTER
-        # --------------------------------------
 
         relevant_results = []
 
@@ -477,42 +431,22 @@ class RAGRetriever:
             metadata = item["metadata"]
 
             relevant_results.append({
-
                 "id": doc_id,
-
                 "text": document_text,
-
                 "source": metadata.get(
                     "file_name",
                     "Unknown source"
                 ),
-
                 "page": metadata.get(
                     "page_label",
                     "Unknown page"
                 ),
-
                 "score": rrf_scores[doc_id],
-
                 "relevant": True
-
             })
 
             if len(relevant_results) >= TOP_K:
                 break
-
-        # --------------------------------------
-        # STEP 6: RETURN RESULTS
-        # --------------------------------------
-
-        if not relevant_results:
-
-            logger.warning(
-                "No relevant PDF chunks found for: %s",
-                question
-            )
-
-            return []
 
         logger.info(
             "Retrieved %d relevant PDF chunks.",
@@ -520,3 +454,64 @@ class RAGRetriever:
         )
 
         return relevant_results
+
+    # ==========================================
+    # 8. PUBLIC RETRIEVAL METHOD
+    # ==========================================
+
+    def retrieve(self, question):
+
+        if not question or not question.strip():
+            raise ValueError(
+                "Question cannot be empty."
+            )
+
+        question = question.strip()
+
+        with self._lock:
+
+            # Always reacquire the collection and reload
+            # the latest uploaded PDF chunks first.
+            self.refresh_collection()
+
+            if not self.documents:
+                raise ValueError(
+                    "No uploaded PDF found. Please upload a PDF first."
+                )
+
+            try:
+
+                return self._retrieve_from_current_collection(
+                    question
+                )
+
+            except Exception as first_error:
+
+                error_message = str(first_error).lower()
+
+                # Retry only when ChromaDB reports that
+                # the collection reference is missing.
+                missing_collection = (
+                    "does not exist" in error_message
+                    or "not found" in error_message
+                )
+
+                if not missing_collection:
+                    raise
+
+                logger.warning(
+                    "ChromaDB collection reference appears stale. "
+                    "Refreshing and retrying once."
+                )
+
+                self.refresh_collection()
+
+                if not self.documents:
+                    raise ValueError(
+                        "The ChromaDB collection exists but contains "
+                        "no uploaded PDF chunks."
+                    ) from first_error
+
+                return self._retrieve_from_current_collection(
+                    question
+                )

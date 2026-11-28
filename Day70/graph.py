@@ -1,5 +1,6 @@
 
 import logging
+import threading
 
 from langgraph.graph import StateGraph, START, END
 
@@ -11,28 +12,43 @@ from tools import multi_query_web_search
 
 
 # ==========================================
-# 1. LOGGING
+# 1. LOGGING AND RETRIEVER LOCK
 # ==========================================
 
 logging.basicConfig(level=logging.INFO)
+
 logger = logging.getLogger("research-assistant")
 
-
-# ==========================================
-# 2. INITIALIZE RETRIEVER
-# ==========================================
+retriever_lock = threading.RLock()
 
 retriever = RAGRetriever()
 
 
+# ==========================================
+# 2. REFRESH RETRIEVER
+# ==========================================
+
 def refresh_retriever():
-    """Reload uploaded PDF documents from ChromaDB."""
+    """
+    Build a new retriever and replace the old one.
+
+    The new retriever is created before replacing the
+    existing retriever, so a failed initialization does
+    not discard the working instance.
+    """
 
     global retriever
 
-    retriever = RAGRetriever()
+    logger.info("Refreshing RAG retriever...")
 
-    logger.info("RAG retriever refreshed successfully")
+    new_retriever = RAGRetriever()
+
+    with retriever_lock:
+        retriever = new_retriever
+
+    logger.info(
+        "RAG retriever refreshed successfully."
+    )
 
 
 # ==========================================
@@ -77,7 +93,6 @@ def planner_node(state: ResearchState):
         question
     )
 
-    # Source selection is deterministic.
     search_pdf, search_web = decide_sources(question)
 
     research_plan = {}
@@ -99,8 +114,6 @@ def planner_node(state: ResearchState):
             f"Research planning warning: {str(e)}"
         )
 
-        # Continue workflow even if the LLM
-        # cannot generate subquestions.
         research_plan = {
             "research_goal": question,
             "subquestions": []
@@ -154,7 +167,9 @@ def route_research(state: ResearchState):
 
         return "web"
 
-    logger.warning("No research source selected")
+    logger.warning(
+        "No research source selected"
+    )
 
     return "synthesis"
 
@@ -171,7 +186,15 @@ def rag_node(state: ResearchState):
 
     try:
 
-        results = retriever.retrieve(question)
+        # Keep retriever access protected while it refreshes
+        # its ChromaDB collection and performs retrieval.
+        with retriever_lock:
+
+            current_retriever = retriever
+
+            results = current_retriever.retrieve(
+                question
+            )
 
         if not results:
 
@@ -220,7 +243,9 @@ def rag_node(state: ResearchState):
 
     except Exception as e:
 
-        logger.exception("PDF retrieval failed")
+        logger.exception(
+            "PDF retrieval failed"
+        )
 
         return {
             "rag_context": "",
@@ -244,16 +269,15 @@ def route_after_rag(state: ResearchState):
 
     question = state["question"]
 
-    # PDF evidence was retrieved.
     if rag_context and rag_context.strip():
 
         logger.info(
-            "PDF evidence retrieved. Proceeding to synthesis."
+            "PDF evidence retrieved. "
+            "Proceeding to synthesis."
         )
 
         return "synthesis"
 
-    # Respect an explicit PDF-only request.
     if is_pdf_only_request(question):
 
         logger.info(
@@ -263,7 +287,6 @@ def route_after_rag(state: ResearchState):
 
         return "synthesis"
 
-    # No PDF evidence: try web search.
     logger.warning(
         "PDF retrieval returned no evidence. "
         "Falling back to web search."
@@ -334,7 +357,9 @@ def web_node(state: ResearchState):
 
     except Exception as e:
 
-        logger.exception("Web research failed")
+        logger.exception(
+            "Web research failed"
+        )
 
         return {
             "web_context": "",
@@ -347,7 +372,7 @@ def web_node(state: ResearchState):
 
 
 # ==========================================
-# NODE 6: COMBINED RETRIEVAL
+# NODE 6: COMBINED PDF AND WEB RETRIEVAL
 # ==========================================
 
 def both_node(state: ResearchState):
@@ -357,6 +382,7 @@ def both_node(state: ResearchState):
     )
 
     pdf_result = rag_node(state)
+
     web_result = web_node(state)
 
     return {
@@ -498,6 +524,7 @@ builder.add_node("synthesis", synthesis_node)
 
 
 # Entry point
+
 builder.add_edge(
     START,
     "planner"
@@ -505,6 +532,7 @@ builder.add_edge(
 
 
 # Initial conditional routing
+
 builder.add_conditional_edges(
     "planner",
     route_research,
@@ -518,6 +546,7 @@ builder.add_conditional_edges(
 
 
 # Conditional routing after PDF retrieval
+
 builder.add_conditional_edges(
     "rag",
     route_after_rag,
@@ -528,11 +557,15 @@ builder.add_conditional_edges(
 )
 
 
-# Retrieval to synthesis
+# Web retrieval to synthesis
+
 builder.add_edge(
     "web",
     "synthesis"
 )
+
+
+# Combined retrieval to synthesis
 
 builder.add_edge(
     "both",
@@ -540,7 +573,8 @@ builder.add_edge(
 )
 
 
-# End
+# Synthesis to end
+
 builder.add_edge(
     "synthesis",
     END
@@ -554,5 +588,6 @@ builder.add_edge(
 research_graph = builder.compile()
 
 logger.info(
-    "Research Assistant LangGraph workflow compiled successfully"
+    "Research Assistant LangGraph workflow "
+    "compiled successfully"
 )
